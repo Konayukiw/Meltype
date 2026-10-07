@@ -273,6 +273,9 @@ public sealed class MeltypeSession
 
         public bool IsShiftDown() => _shift;
 
+        /// <summary>入力欄の文字は、キーを渡されたその場で読んでもらっている (OS が渡してきた値をそのまま使う)。</summary>
+        public bool SurroundingTextIsCurrent => true;
+
         public void RequestSurroundingText(Action<string?, string?> callback) => callback(_before, _after);
 
         public void Show(CompositionView view)

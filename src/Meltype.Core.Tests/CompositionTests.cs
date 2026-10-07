@@ -126,6 +126,9 @@ internal static class CompositionTests
 
         public bool IsShiftDown() => PhysicalShift;
 
+        /// <summary>入力欄の文字を、キーを処理しているその場で読めているか (Mac と同じ環境にするとき true)。</summary>
+        public bool SurroundingTextIsCurrent { get; set; }
+
         public void Show(CompositionView view) => View = view;
         public void Hide() => View = null;
     }
@@ -946,6 +949,42 @@ internal static class CompositionTests
         k.Controller.ForgetLastCommit(); // Meltype を通らないキー (矢印など) が押された
         k.Type("ant ");
         Assert.True(!k.Host.Events.Any(e => e.StartsWith("bs:")), "キャレットが動いたかもしれないので消さない");
+    }
+
+    [Test]
+    public static void AutoCorrect_NotWhenCaretMovedOnMac()
+    {
+        // 報告 (#137): 確定した後に別の場所をクリックしてから英語の語を確定すると、前の語ではなく
+        // 「今のキャレットの前の文字」が消される。Mac はクリックを知らされない (ForgetLastCommit が呼ばれない) ので、
+        // 消す前に「直前に確定した語が今のキャレットの位置にあるか」を入力欄に確かめる。
+        var k = new Keyboard();
+        k.Host.SurroundingTextIsCurrent = true;
+        k.Type("i ");
+        k.Host.PrecedingText = "ほかのところ"; // 別の場所をクリックした (Mac なので知らされない)
+        k.Type("want ");
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("bs:")), $"前の語が今のキャレットの位置に無いので消さない: {string.Join("|", k.Host.Events)}");
+    }
+
+    [Test]
+    public static void AutoCorrect_StillCorrectsWhenCaretStaysAtTheWord()
+    {
+        // Mac (入力欄の文字をその場で読める) でも、キャレットの直前に前の語があるなら今までどおり直す。
+        var k = new Keyboard();
+        k.Host.SurroundingTextIsCurrent = true;
+        k.Type("i want ");
+        Assert.Equal("I want ", k.Host.Document, string.Join("|", k.Host.Events));
+    }
+
+    [Test]
+    public static void AutoCorrect_StillCorrectsWhenSurroundingTextIsNotCurrent()
+    {
+        // Windows は入力欄の文字を別のスレッドで後から読むので、届いた値が古いことがある (キャレットが動いたことは
+        // ForgetLastCommit で知らされる)。読めていない環境では今までどおり直す。
+        var k = new Keyboard();
+        k.Type("i ");
+        k.Host.PrecedingText = "ほかのところ";
+        k.Type("want ");
+        Assert.True(k.Host.Events.Any(e => e.StartsWith("bs:")), $"読めていない環境では直す: {string.Join("|", k.Host.Events)}");
     }
 
     [Test]
