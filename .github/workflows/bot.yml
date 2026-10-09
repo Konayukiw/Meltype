@@ -1,7 +1,7 @@
 # Meltype の GitHub bot。
 #   Issue を作った・直したとき: OS のラベルと「要トリアージ」を付け、足りない情報を聞き、誤判定の報告なら最新のコードで打ってみて結果を返す。
 #   コメントの 1 行目のコマンド:
-#     だれでも: /repro /explain /jht /help
+#     だれでも: /repro /explain /ca /jht /help
 #     メンテナー (PR のみ): /test /pack /test-repro /test-jht /test-explain
 # Issue・コメントの文は誰でも書けるので、run: の中に ${{ }} で埋め込まず、環境変数で値として渡す。
 # Pull Request のコードは、書き込みの権限を持たない job (pr) でだけ動かす。結果のコメントは別の job (report) が書く。
@@ -88,10 +88,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app.outputs.token || github.token }}
 
-  # main 上での repro / explain / jht
+  # main 上での repro / explain / ca / jht
   run:
     needs: parse
-    if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'explain' || needs.parse.outputs.action == 'jht'
+    if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'explain' || needs.parse.outputs.action == 'ca' || needs.parse.outputs.action == 'jht'
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -105,7 +105,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Mozc helper from latest release
-        if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'jht'
+        if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'ca' || needs.parse.outputs.action == 'jht'
         shell: pwsh
         run: |
           $bin = 'native/mozc/bin'
@@ -143,7 +143,7 @@ jobs:
             dotnet run --project src/Meltype.Core.Tests -c Release -- --jht "$env:KEYS" | Out-File results/jht.json -Encoding utf8NoBOM
             exit 0
           }
-          # repro (Mozc があれば漢字も)
+          # repro と ca (Mozc があれば漢字も。ca も repro と同じく打つ。LAST は space)
           dotnet run --project src/Meltype.Tests -c Release -- --repro "$env:KEYS" "$env:LAST" | Out-File results/repro-main.json -Encoding utf8
           $tag = git tag -l 'v*' --sort=-v:refname | Select-Object -First 1
           if ($tag -and (git ls-tree --name-only $tag src/Meltype.Core.Tests/Repro.cs)) {

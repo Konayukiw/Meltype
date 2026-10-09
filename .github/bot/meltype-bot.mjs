@@ -170,6 +170,7 @@ const Help = [
   '|---|---|---|',
   '| `/repro <打ったキー> [space\\|enter\\|none]` | 最新のコードで打つ (Mozc があれば漢字も) | だれでも |',
   '| `/explain <打ったキー>` | IME 自動切替での 1 文字ずつの判定理由 | だれでも |',
+  '| `/ca <打ったキー>` | Space で変換して、文節の区切りと最初の文節の候補 (9 件まで) を出す | だれでも |',
   '| `/jht <出てほしい文> [/ 読み]` | 考えられるローマ字打ちで変換テスト (読みはオプション) | だれでも |',
   '| `/test` | Pull Request のコードでテストを流す | メンテナー |',
   '| `/pack` | Pull Request のコードでテスト版の zip を作る | メンテナー |',
@@ -222,7 +223,7 @@ async function parse() {
   }
 
   const line = (event.comment.body ?? '').split('\n')[0].trim();
-  const match = line.match(/^\/(repro|explain|jht|test-repro|test-jht|test-explain|test|pack|help)\b\s*(.*)$/);
+  const match = line.match(/^\/(repro|explain|ca|jht|test-repro|test-jht|test-explain|test|pack|help)\b\s*(.*)$/);
   if (!match || event.comment.user?.type === 'Bot') return output({ action: 'none' });
   const [, command, rest] = match;
   const maintainer = Maintainers.includes(event.comment.author_association);
@@ -276,11 +277,13 @@ async function parse() {
   }
 
   const words = rest.trim().split(/\s+/);
-  let last = 'enter';
+  // ca は末尾の space / enter / none も打つ文字として渡す。最後のキーの指定か本当に打った文字かを bot は見分けられないため (issue #239)
+  let last = command === 'ca' ? 'space' : 'enter';
   if (command === 'repro' && ['space', 'enter', 'none'].includes(words.at(-1)) && words.length > 1) last = words.pop();
   const keys = words.join(' ').replace(/^`|`$/g, '');
   if (!isKeys(keys)) {
-    await upsertComment(issue, `error-${event.comment.id}`, `打ったキーを英字で書いてください (例: \`/${command} nihongowohanasu\`)。\n\n${Help}`);
+    const example = command === 'ca' ? 'kisha' : 'nihongowohanasu';
+    await upsertComment(issue, `error-${event.comment.id}`, `打ったキーを英字で書いてください (例: \`/${command} ${example}\`)。\n\n${Help}`);
     return output({ action: 'none' });
   }
   await react('eyes');
@@ -356,6 +359,52 @@ async function report() {
     lines.push('', `<sub>変換エンジン: ${engine || 'なし (判定だけ)'}。${!hasMozc ? '漢字の正しさは未確認。' : ''}[実行結果](${runUrl})</sub>`);
     await upsertComment(issue, process.env.BOT_COMMENT_ID ? `repro-${process.env.BOT_COMMENT_ID}` : 'repro', lines.join('\n'));
     if (verdict === 'reproduced') await gh('POST', `/issues/${issue}/labels`, { labels: ['再現済み'] }).catch(() => {});
+    return;
+  }
+
+  if (action === 'ca') {
+    const kind = `ca-${process.env.BOT_COMMENT_ID}`;
+    const versions = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.startsWith('repro-')).sort() : [];
+    if (versions.length === 0) {
+      await upsertComment(issue, kind, `候補を出せませんでした ([実行結果](${runUrl}))。`);
+      return;
+    }
+    const results = versions.map(file => ({
+      name: file.replace(/^repro-/, '').replace(/\.json$/, ''),
+      r: readJson(path.join(dir, file)),
+    }));
+    const engine = results.map(v => v.r?.engine).find(Boolean) ?? '';
+    if (!results.some(v => /Mozc/i.test(v.r?.engine ?? ''))) {
+      await upsertComment(issue, kind, `ℹ️ Mozc の変換ヘルパーが使えなかったため、候補を出せませんでした。\n\n[実行結果](${runUrl})`);
+      return;
+    }
+    const clauseCell = ({ r }) => {
+      if (!r) return '(失敗)';
+      if (r.clauses) return r.clauses.map(code).join(' ｜ ');
+      // 変換中でも文節に分かれていないときは clauses が無い (Repro.cs)。変換した結果をそのまま出す
+      if (r.candidates) return code(r.converted);
+      return `変換されず ${code((r.committed ?? '') + (r.composing ?? ''))} と確定しました`;
+    };
+    const names = results.map(v => v.name);
+    const lines = [
+      `${code(keys)} を Space で変換しました。`,
+      '',
+      '| 版 | 文節 |',
+      '|---|---|',
+      ...results.map(v => `| ${v.name} | ${clauseCell(v)} |`),
+      '',
+    ];
+    const count = Math.max(0, ...results.map(v => v.r?.candidates?.length ?? 0));
+    if (count > 0) {
+      lines.push('最初の文節の候補:', '', `| # | ${names.join(' | ')} |`, `|---|${names.map(() => '---').join('|')}|`);
+      for (let i = 0; i < count; i++) {
+        const cells = results.map(v => { const c = v.r?.candidates?.[i]; return c == null ? '' : code(c); });
+        lines.push(`| ${i + 1} | ${cells.join(' | ')} |`);
+      }
+      lines.push('');
+    }
+    lines.push(`<sub>変換エンジン: ${engine}。[実行結果](${runUrl})</sub>`);
+    await upsertComment(issue, kind, lines.join('\n'));
     return;
   }
 
