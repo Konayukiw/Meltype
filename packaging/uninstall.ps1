@@ -40,6 +40,14 @@ function Stop-Meltype {
 # 旧名 (AutoIME) のときのものも一緒に消す。
 Stop-Meltype
 
+# Meltype IME の登録を外す (インストール先を消す前に。管理者権限の確認が出る)
+$imeScript = Join-Path $env:LOCALAPPDATA 'Programs\Meltype\meltype-ime.ps1'
+if (-not (Test-Path -LiteralPath $imeScript)) { $imeScript = Join-Path $PSScriptRoot 'app\meltype-ime.ps1' }
+if (Test-Path -LiteralPath $imeScript) {
+    . $imeScript
+    if (-not (Uninstall-MeltypeIme)) { Say "Meltype IME の登録を外せませんでした。管理者として、次を実行してください:`nregsvr32 /u `"$MeltypeProgramFiles\Meltype\tip\x64\MeltypeTip.dll`"`n%SystemRoot%\SysWOW64\regsvr32 /u `"$MeltypeProgramFiles\Meltype\tip\x86\MeltypeTip.dll`"" }
+}
+
 foreach ($name in 'Meltype.lnk', 'AutoIME.lnk') {
     $shortcut = Join-Path ([Environment]::GetFolderPath('Startup')) $name
     if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut -Force }

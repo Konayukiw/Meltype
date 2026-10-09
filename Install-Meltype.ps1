@@ -1,9 +1,13 @@
 ﻿# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yukishiro
 
+# -NoIme: Meltype IME を入れない (変換ボックスで入力する方式だけ。管理者権限が要らない)
+param([switch]$NoIme)
+
 $ErrorActionPreference = 'Stop'
 
-# Meltype はタスクトレイに常駐する独立プロセスとして動く。TSF/COM コンポーネントを他アプリに読み込ませることはない。
+# Meltype はタスクトレイに常駐するプロセス (Meltype.exe) と、Windows の IME として入力欄に直接入力する
+# Meltype IME (native\tip の TSF の DLL。入力の本体は Meltype.exe に問い合わせる) でできている。
 $project = Join-Path $PSScriptRoot 'src\Meltype\Meltype.csproj'
 $output = Join-Path $PSScriptRoot 'app-build'
 
@@ -25,6 +29,25 @@ if (Test-Path -LiteralPath (Join-Path $mozcBin 'meltype_mozc_helper.exe')) {
 
 $exe = Join-Path $output 'Meltype.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw "Meltype.exe が作成されませんでした: $exe" }
+
+if (-not $NoIme) {
+    try {
+        & (Join-Path $PSScriptRoot 'native\tip\build.ps1') -Configuration Release
+        $tip = Join-Path $output 'tip'
+        foreach ($arch in 'x64', 'x86') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $tip $arch) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot "native\tip\bin\$arch\MeltypeTip.dll"), (Join-Path $PSScriptRoot "native\tip\bin\$arch\MeltypeTip.dll.sha256") -Destination (Join-Path $tip $arch) -Force
+        }
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'native\tip\Register-Tip.ps1') -Destination $tip -Force
+        . (Join-Path $PSScriptRoot 'packaging\meltype-ime.ps1')
+        # 自分で実行したときなので、前に登録を断っていても、もう一度聞く
+        Install-MeltypeIme -Source $tip -Ask | Out-Null
+    }
+    catch {
+        # C++ のビルドツールが無いなど。Meltype 本体 (変換ボックスで入力する方式) は入れる
+        Write-Warning "Meltype IME を入れられませんでした (変換ボックスで入力する方式で使えます): $($_.Exception.Message)"
+    }
+}
 
 # 自動起動と、スタートメニュー・Windows 検索からの起動用 (現在のユーザー)
 $shell = New-Object -ComObject WScript.Shell

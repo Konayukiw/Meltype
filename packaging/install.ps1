@@ -1,10 +1,13 @@
 ﻿# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yukishiro
 
+# -Ask: Install.cmd から自分で実行したとき。前に Meltype IME の登録を断っていても、もう一度聞く (自動更新では聞かない)
+param([switch]$Ask)
+
 $ErrorActionPreference = 'Stop'
 
 # Meltype のインストール。ビルド済みの app フォルダーを %LOCALAPPDATA%\Programs\Meltype にコピーし、
-# スタートアップとスタートメニューに登録して起動する。管理者権限は不要。.NET は app の dotnet フォルダーに同梱しているので、インストール不要。
+# スタートアップとスタートメニューに登録して起動する。管理者権限は不要 (Meltype IME を登録するときだけ UAC で求める)。.NET は app の dotnet フォルダーに同梱しているので、インストール不要。
 
 $source = Join-Path $PSScriptRoot 'app'
 $target = Join-Path $env:LOCALAPPDATA 'Programs\Meltype'
@@ -65,7 +68,15 @@ Get-ChildItem -LiteralPath $target -Recurse -File | Unblock-File -ErrorAction Si
 # 前は zip を展開したフォルダーの Uninstall.cmd しか無く、zip を消していると探し直す手間がかかった。
 $uninstaller = Join-Path $target 'uninstall.ps1'
 $uninstallSource = Join-Path $PSScriptRoot 'uninstall.ps1'
-if (Test-Path -LiteralPath $uninstallSource) {
+# インストーラー (Meltype-<版>-setup.exe) で入れていたら、その「設定 → アプリ」の項目の版だけ新しくする
+# (自動更新もこのスクリプトを使うので、項目が二重にならないように)。
+$innoKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Meltype_is1'
+if ((Test-Path -LiteralPath $innoKey) -and (Test-Path -LiteralPath (Join-Path $target 'unins000.exe'))) {
+    $version = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+    Set-ItemProperty -Path $innoKey -Name DisplayVersion -Value $version
+    Set-ItemProperty -Path $innoKey -Name DisplayName -Value 'Meltype'
+}
+elseif (Test-Path -LiteralPath $uninstallSource) {
     Copy-Item -LiteralPath $uninstallSource -Destination $uninstaller -Force
     Unblock-File -LiteralPath $uninstaller -ErrorAction SilentlyContinue
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Meltype'
@@ -83,6 +94,20 @@ if (Test-Path -LiteralPath $uninstallSource) {
     foreach ($name in $values.Keys) { Set-ItemProperty -Path $key -Name $name -Value $values[$name] }
     foreach ($name in 'NoModify', 'NoRepair') { Set-ItemProperty -Path $key -Name $name -Value 1 -Type DWord }
     Set-ItemProperty -Path $key -Name EstimatedSize -Value $size -Type DWord
+}
+
+# Meltype IME (入力欄に直接入力)。登録には管理者権限が要る。断られたら、今までどおり変換ボックスで入力する方式で使う
+$imeScript = Join-Path $target 'meltype-ime.ps1'
+if ((Test-Path -LiteralPath $imeScript) -and (Test-Path -LiteralPath (Join-Path $target 'tip'))) {
+    # 失敗しても、ショートカットを作って Meltype を起動するところまでは続ける (自動更新で Meltype が止まったままにならないように)
+    try {
+        . $imeScript
+        # 自分で実行したとき (-Ask) か、もう登録してある (DLL を入れ替える) ときだけ。頼まれていないのに管理者権限の確認を出さない
+        if ($Ask -or (Test-MeltypeImeRegistered)) { Install-MeltypeIme -Source (Join-Path $target 'tip') -Ask:$Ask | Out-Null }
+    }
+    catch {
+        Write-Host "Meltype IME を登録できませんでした (変換ボックスで入力する方式で使えます): $($_.Exception.Message)"
+    }
 }
 
 # 自動起動と、スタートメニュー・Windows 検索からの起動用 (現在のユーザー)

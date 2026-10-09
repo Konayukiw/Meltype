@@ -25,6 +25,9 @@ internal static class Quality
     [
         // --- 日本語の文 (テスト用の変換エンジンはかなのまま返す) ---
         new("日本語", "kyouhaiitenkidesune", "きょうはいいてんきですね"),
+        new("日本語", "hosuthingu", "ほすてぃんぐ"),
+        new("日本語", "tsukuenouenoitsumonohon", "つくえのうえのいつものほん"),
+        new("日本語", "matsurinokatsudounoketsuron", "まつりのかつどうのけつろん"),
         new("日本語", "watashihagakuseidesu", "わたしはがくせいです"),
         new("日本語", "arigatougozaimasu", "ありがとうございます"),
         new("日本語", "yoroshikuonegaishimasu", "よろしくおねがいします"),
@@ -102,8 +105,18 @@ internal static class Quality
 
         // --- 日本語の中の英単語 ---
         new("混在", "kyouhagoogledekensaku", "きょうはgoogleでけんさく"),
+        new("混在", "tanaka@example.com", "tanaka@example.com"),
+        new("混在", "yamada.taro@example.co.jp", "yamada.taro@example.co.jp"),
+        new("混在", "foo_bar@example.com", "foo_bar@example.com"),
+        new("混在", "taro+news@example.com", "taro+news@example.com"),
+        new("混在", "yamada-taro@example.com", "yamada-taro@example.com"),
+        new("混在", "reflectsareta", "reflectされた"),
+        new("混在", "selectshita", "selectした"),
+        new("混在", "inviteshimashita", "inviteしました"),
+        new("混在", "invitewookutta", "inviteをおくった"),
         new("混在", "githubnipushshita", "githubにpushした"),
         new("混在", "pythondekaita", "pythonでかいた"),
+        new("混在", "korehathin", "これはthin"),
         new("混在", "zoomdekaigi", "zoomでかいぎ"),
         new("混在", "slackderenraku", "slackでれんらく"),
         new("混在", "amazondekaimono", "amazonでかいもの"),
@@ -178,6 +191,9 @@ internal static class Quality
         new("綴り", "la", "ぁ"),
         new("綴り", "mala", "まぁ"),
         new("綴り", "ltu", "っ"),
+        new("綴り", "moraltute", "もらって"),
+        new("綴り", "moraltsute", "もらって"),
+        new("綴り", "kyouhamoraltute", "きょうはもらって"),
         new("綴り", "thi", "てぃ"),
         new("綴り", "fa", "ふぁ"),
         new("綴り", "je", "じぇ"),
@@ -190,6 +206,8 @@ internal static class Quality
         new("大文字", "I", "I"),
         new("大文字", "W", "W"),
         new("大文字", "kaW", "かW"),
+        new("大文字", "AInituite", "AIについて"),
+        new("大文字", "AIdekiru", "AIできる"),
     ];
 
     /// <summary>コードの行のキャレット位置 (コメント・文字列の中か)。</summary>

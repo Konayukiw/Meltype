@@ -83,6 +83,12 @@ public sealed class FocusInspector : IDisposable
 
     public FocusInfo Current => _info;
 
+    /// <summary>
+    /// 前面のアプリが設定「入力欄とみなすアプリ」にあるか (このクラスのスレッドから呼ばれる)。
+    /// そのアプリでは、入力欄と判定できなくてもフォーカスのある所を入力欄として扱う (issue #52)。
+    /// </summary>
+    public Func<bool>? TreatsAsTextInput { get; set; }
+
 
     private Func<UiAutomation.Element, bool>? _selectionMatches;
     private long _selectionSequence;
@@ -141,7 +147,9 @@ public sealed class FocusInspector : IDisposable
         {
             try
             {
-                if (Automation()?.Focused() is { IsPassword: false } element) result = element.CaretBounds();
+                // UI Automation で取れなければ、ウィンドウのキャレット (MSAA の OBJID_CARET) を見る。Chrome は、Google ドキュメントのように
+                // 入力位置を UI Automation で返さない編集画面でも、こちらでは返すことがある (拡大鏡などが使っている。issue #128)。
+                if (Automation()?.Focused() is { IsPassword: false } element) result = element.CaretBounds() ?? AccessibleCaretBounds();
             }
             finally
             {
@@ -149,6 +157,30 @@ public sealed class FocusInspector : IDisposable
             }
         });
         return done.Wait(waitMs) ? result : null;
+    }
+
+    /// <summary>フォーカスのあるウィンドウのキャレットの四角形 (MSAA の OBJID_CARET)。取れなければ null。</summary>
+    private static Rectangle? AccessibleCaretBounds()
+    {
+        var thread = Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out _);
+        var info = new Native.GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.GUITHREADINFO>() };
+        if (!Native.GetGUIThreadInfo(thread, ref info) || info.hwndFocus == IntPtr.Zero) return null;
+        var iid = typeof(Accessibility.IAccessible).GUID;
+        if (Native.AccessibleObjectFromWindow(info.hwndFocus, Native.OBJID_CARET, ref iid, out var accessible) != 0 || accessible is not Accessibility.IAccessible caret) return null;
+        try
+        {
+            caret.accLocation(out var left, out var top, out var width, out var height, 0);
+            // キャレットが無いときは 0,0,0,0 が返る
+            return height is > 0 and < 200 && (left != 0 || top != 0) ? new Rectangle(left, top, Math.Max(1, width), height) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.ReleaseComObject(caret);
+        }
     }
 
     /// <summary>キャレットの前後の文字列 (それぞれ最大 20 文字) を調べて callback(前, 後ろ) に渡す (このクラスのスレッドから呼ばれる)。</summary>
@@ -242,8 +274,9 @@ public sealed class FocusInspector : IDisposable
             // Meltype 自身の画面 (設定のドロップダウンなど) には UI Automation で問い合わせない。
             // 自分の UI スレッドに問い合わせが割り込むと、開いているドロップダウンが閉じてしまう。
             if (Input.ForegroundTracker.IsOwnWindow(Native.GetForegroundWindow())) return new FocusInfo(false, false, null, "Meltype の画面");
+            var forced = TreatsAsTextInput?.Invoke() == true;
             var element = Automation()?.Focused();
-            if (element is null) return new FocusInfo(false, false, null, "フォーカスなし");
+            if (element is null) return forced ? new FocusInfo(true, false, null, "フォーカスなし (入力欄とみなすアプリ)") : new FocusInfo(false, false, null, "フォーカスなし");
             var type = element.ControlType;
             var description = $"{ControlTypeName(type)} \"{Trim(element.Name)}\" ({element.ClassName})";
             if (element.IsPassword) return new FocusInfo(true, true, element.Bounds, description);
@@ -269,6 +302,15 @@ public sealed class FocusInspector : IDisposable
                 // Windows Terminal などは Edit ではなく TextPattern を持つ独自コントロール。
                 editable = true;
             }
+            else if (element.IsKeyboardFocusable && element.IsIa2Editable())
+            {
+                // Chromium / Electron の contenteditable は、空欄の間は UI Automation では
+                // Group で ValuePattern / TextPattern を持たなくても、IAccessible2 では
+                // EDITABLE として公開されることがある。
+                editable = true;
+                description += " (IAccessible2: 編集可能)";
+            }
+
             // UI Automation では入力欄と分からなくても、Windows のキャレット (点滅する縦線) を出しているなら文字を打つ所
             // (サクラエディタなど、独自の編集画面を持つ Win32 のアプリ)。
             if (!editable && HasCaret())
@@ -276,13 +318,34 @@ public sealed class FocusInspector : IDisposable
                 editable = true;
                 description += " (キャレットあり)";
             }
-            return new FocusInfo(editable, false, element.Bounds, description, element.Name, element.ClassName);
+            // 画面をすべて自分で描くエディター (Zed・LibreOffice) は、UI Automation でもキャレットでも入力欄と分からない (issue #75, #228)。
+            // フォーカスがウィンドウそのものにあるときは編集画面とみなす。Zed は「コード」の種類なので、変換ボックスを開くのは
+            // コメント・文字列の中か、半角/全角 で日本語にした行だけ (ほかの所のキーは今までどおりそのまま通す)。
+            if (!editable && element.ClassName is { } windowClass && EditorWindowClasses.Contains(windowClass))
+            {
+                editable = true;
+                description += " (エディターの画面)";
+            }
+            // それでも分からないアプリ (Premiere Pro など、画面を自分で描くアプリ) は、設定「入力欄とみなすアプリ」に
+            // 書いてあれば入力欄として扱う。1 文字のショートカットが多いアプリもあるので、既定では何もしない。
+            if (!editable && forced)
+            {
+                editable = true;
+                description += " (入力欄とみなすアプリ)";
+            }
+            return new FocusInfo(editable, false, element.Bounds, description, element.Name, element.ClassName ?? "");
         }
         catch (Exception ex)
         {
             return new FocusInfo(false, false, null, $"確認できない: {ex.GetType().Name}");
         }
     }
+
+    /// <summary>入力欄が UI Automation に出てこない、画面をすべて自分で描くエディターのウィンドウのクラス名。</summary>
+    // Zed::Window: Zed (issue #75)
+    // SALFRAME: LibreOffice (Writer・Calc・Impress など)。支援技術が動いていないと UI Automation で文書の中身を出さず、
+    // フォーカスは文書の窓そのもの (ControlType Window) になる (issue #228)。Calc のセルも、打てばそのまま編集が始まる
+    private static readonly HashSet<string> EditorWindowClasses = new(StringComparer.Ordinal) { "Zed::Window", "SALFRAME" };
 
     /// <summary>前面のウィンドウのスレッドが、フォーカスのあるウィンドウにキャレットを出しているか。</summary>
     private static bool HasCaret()

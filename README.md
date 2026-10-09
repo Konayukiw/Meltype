@@ -1,78 +1,198 @@
-# Meltype
+<p align="center">
+  <img src="docs/images/logo.png" alt="Meltype" width="480"><br>
+  <sub>Logo by <a href="https://github.com/Crysta1221">@Crysta1221</a></sub>
+</p>
 
-**雪解けのように、半角/全角の壁を溶かす日本語入力。**
+<p align="center"><b>雪解けのように、半角/全角の壁を溶かす日本語入力。</b></p>
 
-半角/全角 キーを押さなくても、日本語と英語を打ち分けられるようにする Windows 常駐ツールです。
-(開発中は AutoIME という仮の名前でした。以前の設定と学習データは、Meltype の初回起動時に自動で引き継ぎます)
+<p align="center">
+  <a href="https://github.com/yksr-melt/Meltype/releases/latest"><img src="https://img.shields.io/github/v/release/yksr-melt/Meltype?color=5ec4f0" alt="release"></a>
+  <a href="https://github.com/yksr-melt/Meltype/releases"><img src="https://img.shields.io/github/downloads/yksr-melt/Meltype/total?color=ff8ab4" alt="downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-7a96f0" alt="license"></a>
+</p>
 
-Windows 版のほか、Mac 版・Linux 版のプレビュー版があります ([mac/README.md](mac/README.md)。Linux 版は IBus のエンジン)。プレビュー版は、まだ一部の機能が無く、動きも変わることがあります。
+<p align="center">
+  <a href="https://trendshift.io/repositories/284759?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-284759" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/284759/daily?language=C%23" alt="yksr-melt%2FMeltype | Trendshift" width="250" height="55"/></a>
+</p>
 
-## できること
+<h3 align="center">半角/全角 キーは、もう押さなくていい！</h3>
 
-- 半角/全角 キーを押さずに、ローマ字のまま日本語と英語を混ぜて打てます (`kyouhagoogledekensaku` → 今日はgoogleで検索)
-- 日本語は変換ボックスでかな・漢字に変換し、英単語 (`google` `github` `hello` …) は自動で英字のまま
-- 英文 (`I want to go to the park`) も、そのまま打てます
-- 絵文字・顔文字の変換 (えがお → 😊)、よくある書き間違いの指摘 (ブレスレッド → ブレスレット)
-- VS Code やターミナルでは基本は英数、コメントや文字列の中だけ日本語
-- 打った内容をネットワークに送りません。判定・変換はすべて PC の中で行います
+<p align="center">
+ローマ字で打つだけ。日本語か英語かは Meltype が見分けて、その場で切り替えます！
+</p>
 
-## インストール
+<p align="center">
+  <a href="https://github.com/yksr-melt/Meltype/releases/latest"><b>ダウンロード</b></a>
+  &nbsp;·&nbsp;
+  <a href="docs/USAGE.md">使い方</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/yksr-melt/Meltype/issues/new/choose">不具合の報告・提案</a>
+</p>
 
-1. [Releases](https://github.com/yksr-melt/Meltype/releases) から `Meltype-<version>-windows.zip` をダウンロードして展開する
-   (Mac 版は `Meltype-<version>-mac.zip`、Linux 版は `Meltype-<version>-linux.zip`。どちらもプレビュー版)
-2. `Install.cmd` をダブルクリックする (管理者権限は不要)
-   - Meltype はコード署名をしていないので、「Windows によって PC が保護されました」と出ることがあります。「詳細情報」→「実行」で入れられます。
-   - 「ウイルスを検出しました」などの脅威検出は、上の SmartScreen の警告とは別です。誤検知の可能性もありますが、検出名だけでは判断できません。Windows セキュリティ →「ウイルスと脅威の防止」→「保護の更新」で定義を更新し、公式リリースを再ダウンロードして再検査してください。引き続き検出される場合は、保護を無効にしたりフォルダーを除外したりせず、「保護の履歴」で検出名・影響を受けた項目を確認し、版と検出名を [Issues](https://github.com/yksr-melt/Meltype/issues) に報告してください (個人名・パス・ダウンロード URL の一時トークンは隠してください)。
-   - ダウンロードした zip が本物か確かめたいときは、リリースのページに出ている SHA-256 と比べてください (PowerShell: `Get-FileHash .\Meltype-<version>-windows.zip`)。
-3. タスクトレイに「あ」のアイコンが出れば動いています。Windows の起動時にも自動で起動します。
+<p align="center">
+  <img src="docs/images/demo.svg" alt="kyouhagoogledekensaku と打つと、今日はgoogleで検索 になる" width="640">
+</p>
 
-1.0.0 以降は、新しい版が出ると自動で更新します (トレイのアイコンを右クリック →「更新」→「自動で更新する」で止められます)。
-アンインストールは、トレイの Meltype のアイコンを右クリック →「アンインストール...」か、Windows の「設定」→「アプリ」→「インストールされているアプリ」で Meltype の「…」→「アンインストール」を選びます (設定と学習データも消えます)。zip の中の `Uninstall.cmd` をダブルクリックしても同じです。
+<br><br>
 
-必要なもの: Windows 10 / 11 (64bit)、Microsoft IME (Windows 標準の日本語入力)。.NET は同梱しているので、別に入れる必要はありません。
+<img src="docs/images/headings/features.svg" alt="できること" width="480"><br>
 
-## 使い始める
+<p align="center">
+  <img src="docs/images/features.svg" alt="混ぜたまま打てる / コードの手も止めない / ぜんぶ PC の中で" width="100%">
+</p>
 
-メモ帳やブラウザーの入力欄で、IME を気にせずそのままローマ字で打ってください。
+<a name="たとえば"></a>
+<img src="docs/images/headings/readme/s01.svg" alt="たとえば" height="40">
 
-- 日本語はかなで、英単語は英字のまま、カーソルの下の変換ボックスに出ます
-- **Enter** で確定、**Space** で漢字に変換 (英単語のときは確定して空白)
-- 変換中は ← → で文節を選び、Space / ↓ で候補を切り替え
-- **F7** でカタカナ、**F10** で英字。英字にして確定した語は、次から英字になります
-- **半角/全角** で英数 (そのまま入力) ⇔ 日本語、**Ctrl + 半角/全角** で Meltype 自体の一時停止 / 再開
-- よく使う言葉は、トレイのアイコンを右クリック →「ユーザー辞書...」で登録できます
 
-詳しい使い方 (キー操作・判定の強さ・かな入力・コードエディター・設定など) は [docs/USAGE.md](docs/USAGE.md) にあります。
+```
+kyouhagoogledekensaku    →  今日はgoogleで検索
+ashitanomeetingwotsuika  →  明日のmeetingを追加
+I want to go to the park →  I want to go to the park
+```
 
-## よくある質問
+英単語は英字のまま、日本語はかな・漢字に。英文だってそのまま入ります！
+VS Code やターミナルでは英数が基本で、コメントと文字列の中だけ日本語に。AI エージェントの `/command`・`$skill`・`@ファイル名` も、変換されずにそのまま入ります。
 
-**タスクバーの IME の表示がずっと「A」のまま**
-Meltype が Windows の IME を OFF にして、代わりに入力を受け持っているためです (故障ではありません)。今のモードは、入力欄に入ったときにカーソルの近くに出る「あ」「A」か、タスクトレイの Meltype のアイコンで分かります。
+<a name="ほかにも"></a>
+<img src="docs/images/headings/readme/s02.svg" alt="ほかにも" height="40">
 
-**Google 日本語入力など、ほかの IME も使いたい**
-Ctrl + 半角/全角 で Meltype を一時停止してから使ってください。
 
-**英語のつもりがかなになった / かなのつもりが英字になった**
-F10 (英字) / F6 (ひらがな) で直して確定すると、次からその語は直した方になります。トレイの右クリック →「自動判定の強さ」でも調整できます。
+えがお → 😊 の絵文字変換、ブレスレッド → ブレスレット のような書き間違いの指摘、予測変換、アプリごとの設定など。
 
-**おかしな動きを見つけた**
-トレイのアイコンを右クリック →「不具合の報告・提案...」から報告できます。「どのアプリで」「何と打って」「どうなったか」を書いてもらえると助かります。
+<sub>Windows 10 / 11 に対応。Mac 版・Linux 版はプレビュー版です。</sub>
 
-## プライバシー
+<br><br>
 
-Meltype はキーボードの入力を監視して動くツールですが、打った内容をネットワークに送ることはありません。 セキュリティの方針と脆弱性の報告先は [SECURITY.md](SECURITY.md)。通信するのは、自動更新で GitHub に新しい版があるかを確かめるとき (送るのは今の版だけ) と、自分で開いた不具合報告のフォームだけです。
-保存するのは `%LOCALAPPDATA%\Meltype` の設定・学習データ・ユーザー辞書と、ファイルログを ON にしたときのログだけです。
+<img src="docs/images/headings/install.svg" alt="インストール" width="480"><br>
 
-## ライセンス
+1. [Releases](https://github.com/yksr-melt/Meltype/releases/latest) から `Meltype-<version>-setup.exe` をダウンロード
+2. 開いて、案内どおりに進める
+3. タスクトレイに「あ」が出たら準備完了！
 
-Meltype は **GNU General Public License v3.0** ([LICENSE](LICENSE)) で公開しています。
+管理者権限は不要 (Meltype IME を入れるときだけ確認が出ます。断っても使えます)。新しい版は自動で入ります。
 
-- 個人・会社でそのまま使う、GPL v3 の条件 (改造版もソースを公開) で改造・再配布する → 無料で自由に使えます
-- GPL v3 の条件で使えない場合 (製品に組み込んでソースを公開せずに配布したいなど、非公開で利用したい場合) は、メールでご相談ください: ibutya0319@gmail.com
+「Windows によって PC が保護されました」と出たら、「詳細情報」→「実行」。コード署名をしていないため表示されます。
 
-貢献の方法と貢献者ライセンス同意 (CLA) は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+<details>
+<summary>zip 版・Mac 版・Linux 版</summary>
 
-ソースファイルの先頭には `SPDX-License-Identifier: GPL-3.0-or-later` を付けています。配布用パッケージに同梱している .NET ランタイム (MIT ライセンス) と、実行時に使う Windows の機能は [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) を参照してください。アプリのバージョン・著作権・ライセンスは、トレイの「Meltype について...」で確認できます。
+| | ファイル |
+|---|---|
+| Windows (zip) | `Meltype-<version>-windows.zip` を展開して `Install.cmd` をダブルクリック |
+| Mac (プレビュー版) | `Meltype-<version>-mac.zip` ([mac/README.md](mac/README.md)) |
+| Linux (プレビュー版) | `Meltype-<version>-linux.zip` (IBus / fcitx5) |
+
+インストーラーでも zip でも、入る場所は同じ `%LOCALAPPDATA%\Programs\Meltype` です。
+Windows 版に必要なのは Windows 10 / 11 (64bit) と Microsoft IME だけで、.NET は同梱しています。
+
+</details>
+
+<details>
+<summary>「ウイルスを検出しました」と出たとき</summary>
+
+SmartScreen の警告とは別のものです。誤検知のこともありますが、検出名だけでは見分けられません。
+
+1. Windows セキュリティ →「ウイルスと脅威の防止」→「保護の更新」で定義を新しくする
+2. 公式のリリースからダウンロードし直して、もう一度検査する
+3. それでも検出されるときは、保護を切ったりフォルダーを除外したりせずに、「保護の履歴」で検出名を確かめて [Issues](https://github.com/yksr-melt/Meltype/issues) で教えてください。個人名やパス、ダウンロード URL の一時トークンは隠してください
+
+ファイルが本物か確かめたいときは、リリースのページにある SHA-256 と比べられます。PowerShell なら `Get-FileHash .\Meltype-<version>-windows.zip` です。
+
+</details>
+
+<details>
+<summary>アンインストール</summary>
+
+トレイのアイコンを右クリックして「アンインストール...」を選ぶか、Windows の「設定」→「アプリ」から消せます。
+インストーラーで入れた場合は、最後に設定と学習データも消すかを聞かれます。zip 版は `Uninstall.cmd` でも消せて、こちらは設定と学習データもまとめて消えます。
+
+</details>
+
+<br><br>
+
+<img src="docs/images/headings/start.svg" alt="使い始める" width="480"><br>
+
+あとは、いつもどおりローマ字で打つだけ！
+
+- **Meltype IME を入れた場合**: <kbd>Win</kbd> + <kbd>Space</kbd> で「Meltype」を選ぶ。文字は入力欄に直接入り、候補は入力位置の下に
+- **入れていない場合**: カーソルの下に変換ボックスが出る
+
+| キー | |
+|---|---|
+| <kbd>Enter</kbd> | 確定 |
+| <kbd>Space</kbd> | 候補を出して選ぶ (4 文字以上は打つそばから漢字になる。短い語は Space で変換) |
+| <kbd>F7</kbd> / <kbd>F10</kbd> | カタカナ / 英字 |
+| <kbd>半角/全角</kbd> | 英数と日本語の切り替え |
+| <kbd>Ctrl</kbd> + <kbd>半角/全角</kbd> | Meltype を一時停止 |
+
+<kbd>F10</kbd> で英字に直した語は、次から英字で出ます。使うほど自分に合っていきます！
+よく使う言葉は、トレイのメニューの「ユーザー辞書...」から登録。くわしくは [docs/USAGE.md](docs/USAGE.md)。
+
+<br><br>
+
+<img src="docs/images/headings/faq.svg" alt="よくある質問" width="480"><br>
+
+<details>
+<summary>タスクバーの IME の表示がずっと「A」のまま</summary>
+
+故障ではありません。Meltype が Windows の IME に代わって入力を受け持っているためです。
+今のモードは、カーソルの近くに出る「あ」「A」か、トレイのアイコンで確認できます。
+
+</details>
+
+<details>
+<summary>Google 日本語入力など、ほかの IME も使いたい</summary>
+
+<kbd>Ctrl</kbd> + <kbd>半角/全角</kbd> で Meltype を一時停止すれば使えます。
+
+</details>
+
+<details>
+<summary>英語のつもりがかなに、かなのつもりが英字になった</summary>
+
+<kbd>F10</kbd> (英字) か <kbd>F6</kbd> (ひらがな) で直して確定すれば、次からはその語を覚えています。
+トレイのメニューの「自動判定の強さ」でも調整できます。
+
+</details>
+
+<details>
+<summary>おかしな動きを見つけた</summary>
+
+トレイのメニューの「不具合の報告・提案...」から送れます。
+「どのアプリで」「何と打って」「どうなったか」があると、すぐに調べられます。
+
+</details>
+
+<br><br>
+
+<img src="docs/images/headings/privacy.svg" alt="プライバシー" width="480"><br>
+
+<p align="center">
+  <img src="docs/images/cards/privacy-send.svg" alt="打った文字は送らない: 判定も変換も PC の中で完結" width="32%">
+  <img src="docs/images/cards/privacy-network.svg" alt="通信は 2 つだけ: 自動更新の確認と、自分で開いた報告のフォーム" width="32%">
+  <img src="docs/images/cards/privacy-storage.svg" alt="保存も PC の中: 設定・学習データ・辞書は %LOCALAPPDATA% の中に" width="32%">
+</p>
+
+保存するのは `%LOCALAPPDATA%\Meltype` の設定・学習データ・ユーザー辞書 (と、ON にしたときのログ) だけです。
+セキュリティの方針と脆弱性の連絡先は [SECURITY.md](SECURITY.md) にあります。
+
+<br><br>
+
+<img src="docs/images/headings/license.svg" alt="ライセンス" width="480"><br>
+
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-7a96f0?style=for-the-badge" alt="GPL-3.0"></a>
+  <img src="https://img.shields.io/badge/%E5%80%8B%E4%BA%BA%E3%83%BB%E4%BC%9A%E7%A4%BE-%E7%84%A1%E6%96%99-5ec4f0?style=for-the-badge" alt="個人・会社 無料">
+  <img src="https://img.shields.io/badge/%E6%94%B9%E9%80%A0%E3%83%BB%E5%86%8D%E9%85%8D%E5%B8%83-OK-ff8ab4?style=for-the-badge" alt="改造・再配布 OK">
+</p>
+
+[GNU GPL v3.0](LICENSE)。個人でも会社でも無料。GPL v3 の条件 (改造版もソースを公開) で、改造・再配布も自由です。
+
+ソースを公開せずに製品へ組み込みたいなど、GPL v3 で使えない場合はご相談ください: ibutya0319@gmail.com
+
+<details>
+<summary>著作権表示・同梱物</summary>
 
 ```
 Meltype
@@ -87,9 +207,40 @@ even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE
 General Public License for more details.
 ```
 
-## 協力してくださった方々
+ソースファイルには `SPDX-License-Identifier: GPL-3.0-or-later` を付けています。
+同梱している .NET ランタイム (MIT) と、使っている Windows の機能については [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) を見てください。
+ロゴ ([docs/meltype.jpg](docs/meltype.jpg)・[docs/images/logo.png](docs/images/logo.png)) は [@Crysta1221](https://github.com/Crysta1221) さんに描いていただきました。
 
-テスト版を使って、不具合の報告や意見をくださった方々です。ありがとうございました (敬称略)。
+</details>
+
+<br><br>
+
+<img src="docs/images/headings/thanks.svg" alt="協力してくださった方々" width="480"><br>
+
+<a name="super-thanks"></a>
+<img src="docs/images/headings/readme/s04.svg" alt="Super Thanks" height="40">
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Crysta1221"><img src="https://github.com/Crysta1221.png?size=200" width="100" alt="@Crysta1221"><br><b>@Crysta1221</b></a><br>
+      <sub>Meltype のロゴ</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/lnkiai"><img src="https://github.com/lnkiai.png?size=200" width="100" alt="@lnkiai"><br><b>@lnkiai</b></a><br>
+      <sub>Meltype IME</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/MuNeNiCK"><img src="https://github.com/MuNeNiCK.png?size=200" width="100" alt="@MuNeNiCK"><br><b>@MuNeNiCK</b></a><br>
+      <sub>Meltype IME の登録 (インストーラー)</sub>
+    </td>
+  </tr>
+</table>
+
+<a name="テスト版で協力してくださった方々"></a>
+<img src="docs/images/headings/readme/s05.svg" alt="テスト版で協力してくださった方々" height="40">
+
+テスト版で不具合の報告や意見をくださった皆さん、本当にありがとうございました！ (敬称略)
 
 - くらいど！ ([@Kuraido8888](https://x.com/Kuraido8888))
 - しぐれ ([@Akisameee0465](https://x.com/Akisameee0465))
@@ -101,6 +252,37 @@ General Public License for more details.
 - Ray
 - うぽつです ([@up2ds](https://x.com/up2ds))
 
-## 開発に参加する
+<a name="コードで協力してくださった方々"></a>
+<img src="docs/images/headings/readme/s03.svg" alt="コードで協力してくださった方々" height="40">
 
-ソースからのビルド・テスト・動作の仕組みは [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)、不具合の報告・辞書の追加・Pull Request の送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+<a href="https://github.com/yksr-melt/Meltype/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=yksr-melt/Meltype&max=60" alt="コードで協力してくださった方々">
+</a>
+
+<br><br>
+
+<img src="docs/images/headings/develop.svg" alt="開発に参加する" width="480"><br>
+
+不具合の報告、辞書の追加、Pull Request、どれも大歓迎です！
+
+<p align="center">
+  <a href="https://github.com/yksr-melt/Meltype/issues/new/choose"><img src="docs/images/cards/contribute-issue.svg" alt="不具合の報告" width="32%"></a>
+  <a href="CONTRIBUTING.md#辞書の追加"><img src="docs/images/cards/contribute-dictionary.svg" alt="辞書の追加" width="32%"></a>
+  <a href="CONTRIBUTING.md"><img src="docs/images/cards/contribute-code.svg" alt="コードで協力" width="32%"></a>
+</p>
+
+- 送り方 → [CONTRIBUTING.md](CONTRIBUTING.md)
+- ビルド・仕組み → [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- Mac の CLI ビルド → [docs/MAC-CLI.md](docs/MAC-CLI.md)、WSL / Linux の CLI ビルド → [docs/WSL.md](docs/WSL.md)
+
+<br><br>
+
+<img src="docs/images/headings/stars.svg" alt="Star History" width="480"><br>
+
+<a href="https://www.star-history.com/?repos=yksr-melt%2FMeltype&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=yksr-melt/Meltype&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=yksr-melt/Meltype&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=yksr-melt/Meltype&type=date&legend=top-left" />
+ </picture>
+</a>

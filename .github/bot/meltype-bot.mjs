@@ -28,14 +28,12 @@ async function gh(method, url, body) {
 
 function output(values) {
   const lines = Object.entries(values).map(([k, v]) => {
-    // 複数行の値も渡せる形 (区切りは推測できない文字列)
     const delimiter = `EOF_${Math.random().toString(36).slice(2)}`;
     return `${k}<<${delimiter}\n${v ?? ''}\n${delimiter}`;
   });
   fs.appendFileSync(process.env.GITHUB_OUTPUT, lines.join('\n') + '\n');
 }
 
-/** Issue フォームの本文 (### 見出し + 値) を { 見出し: 値 } にする。 */
 function parseForm(body) {
   const fields = {};
   for (const part of (body ?? '').split(/^### /m).slice(1)) {
@@ -64,7 +62,6 @@ function lastKey(text) {
   return 'enter';
 }
 
-/** 打ったものとして打てる文字だけか (かなや漢字で書かれていたら、キーをそのまま書いてもらう)。 */
 const isKeys = text => text.length > 0 && /^[\x20-\x7e]+$/.test(text);
 
 async function upsertComment(issue, kind, text) {
@@ -80,7 +77,6 @@ async function react(content) {
   if (event.comment) await gh('POST', `/issues/comments/${event.comment.id}/reactions`, { content }).catch(() => {});
 }
 
-/** bot が付けるラベルの色と説明 (無ければ作る)。版のラベル (v0.2.0) は灰色で作る。 */
 const LabelInfo = {
   '要トリアージ': ['FBCA04', '作者がまだ確認していない報告'],
   'win11': ['0078D4', 'Windows 11'],
@@ -108,14 +104,12 @@ async function ensureLabel(name) {
   if (knownLabels.has(name)) return;
   knownLabels.add(name);
   const [color, description] = LabelInfo[name] ?? (/^v\d/.test(name) ? ['EDEDED', 'Meltype の版'] : [null, null]);
-  if (!color) return; // 雛形で作ってあるラベル (bug・windows など)
-  // 既にあれば 422 が返るので、色と説明だけそろえる (Issue の画面などで先に作られた灰色のラベル)
+  if (!color) return;
   await gh('POST', '/labels', { name, color, description })
     .catch(() => gh('PATCH', `/labels/${encodeURIComponent(name)}`, { color, description }))
     .catch(() => {});
 }
 
-/** 実行環境の欄 (「項目: 値」の行) から付けるラベル。 */
 function environmentLabels(text) {
   const env = {};
   for (const line of text.replace(/```\w*|<\/?details>|<summary>.*?<\/summary>/g, '').split('\n')) {
@@ -138,17 +132,13 @@ function environmentLabels(text) {
   return result;
 }
 
-/** 本文から付ける優先度とアプリの分類 (見当)。 */
 function triageLabels(form, labels) {
   const result = [];
   const text = Object.entries(form).filter(([k]) => !/実行環境|ログ/.test(k)).map(([, v]) => v).join('\n');
   const app = field(form, 'どのアプリで') + '\n' + text;
   const isBug = labels.has('bug') || 'どうなったか' in form;
-  // 優先度は、作者が付け替えていたら (本文を直したときも) そのまま
   if (isBug && ![...labels].some(l => l.startsWith('優先: '))) {
-    // 入力できない・止まる・違う文字が入る (Resolve で「あいうえお」→「あああああ」) は高
     const severe = text.match(/止ま|落ち|固ま|フリーズ|クラッシュ|入力できな|打てな|文字が消え|消えた|起動しな|起動でき|インストールでき|動かな|反映され[なず]|違う文字|別の文字|化け|連続で入力|勝手に|二重に|重複/);
-    // 見た目だけ・一度だけ起きたものは低
     const minor = text.match(/見た目|表示がずれ|位置がずれ|ちらつ|色が|文言|誤字|デザイン|アイコン/);
     const once = field(form, '起きる頻度') === '一度だけ';
     result.push(severe
@@ -178,10 +168,14 @@ const Help = [
   '',
   '| コマンド | すること | 使える人 |',
   '|---|---|---|',
-  '| `/repro <打ったキー> [space\\|enter\\|none]` | 最新のコードで打ってみて、結果を返す | だれでも |',
+  '| `/repro <打ったキー> [space\\|enter\\|none]` | 最新のコードで打つ (Mozc があれば漢字も) | だれでも |',
   '| `/explain <打ったキー>` | IME 自動切替での 1 文字ずつの判定理由 | だれでも |',
+  '| `/jht <出てほしい文> [/ 読み]` | 考えられるローマ字打ちで変換テスト (読みはオプション) | だれでも |',
   '| `/test` | Pull Request のコードでテストを流す | メンテナー |',
   '| `/pack` | Pull Request のコードでテスト版の zip を作る | メンテナー |',
+  '| `/test-repro <キー>` | PR のコードで `/repro` | メンテナー |',
+  '| `/test-jht <文> [/ 読み]` | PR のコードで `/jht` | メンテナー |',
+  '| `/test-explain <キー>` | PR のコードで `/explain` | メンテナー |',
   '| `/help` | この一覧 | だれでも |',
 ].join('\n');
 
@@ -189,14 +183,12 @@ async function parse() {
   const issue = event.issue.number;
   const isPr = Boolean(event.issue.pull_request);
 
-  // Issue を作った・直したとき: 仕分けと、誤判定の報告なら再現
   if (!event.comment) {
     if (event.action !== 'opened' && event.action !== 'edited') return output({ action: 'none' });
     const form = parseForm(event.issue.body);
     const labels = new Set(event.issue.labels.map(l => l.name));
     const add = new Set(osLabels(field(form, 'OS')));
     if (event.action === 'opened') add.add('要トリアージ');
-    // 実行環境 (Meltype の「不具合の報告・提案...」から開くと自動で入る) と本文から、ラベルと優先度の見当を付ける
     const reasons = [];
     for (const { label, reason } of [...environmentLabels(field(form, '実行環境')), ...triageLabels(form, labels)]) {
       if (!add.has(label)) reasons.push(`\`${label}\`: ${reason}`);
@@ -212,11 +204,9 @@ async function parse() {
 
     if (problems.length > 0) add.add('情報待ち');
     else if (labels.has('情報待ち')) await gh('DELETE', `/issues/${issue}/labels/${encodeURIComponent('情報待ち')}`).catch(() => {});
-    // 優先度のラベルは、付かなかったものもそろえておく (作者が手で付け替えられるように)
     for (const label of ['優先: 高', '優先: 中', '優先: 低', ...add]) await ensureLabel(label);
     if (add.size > 0) await gh('POST', `/issues/${issue}/labels`, { labels: [...add] });
 
-    // 仕分けの結果のコメント (作った・直したたびに同じコメントを書き直す)
     const text = [];
     if (problems.length > 0) text.push('報告ありがとうございます。確認のために、もう少し教えてください。', '', ...problems.map(p => `- ${p}`), '', '本文を編集して直してもらえれば、自動でもう一度確認します。', '');
     if (reasons.length > 0) text.push('<details><summary>🤖 自動の仕分け</summary>', '', ...reasons.map(r => `- ${r}`), '', '優先度・分類は本文からの見当です。作者が確認したら `要トリアージ` を外します。', '</details>');
@@ -231,18 +221,18 @@ async function parse() {
     return output({ action: 'none' });
   }
 
-  // コメントのコマンド
   const line = (event.comment.body ?? '').split('\n')[0].trim();
-  const match = line.match(/^\/(repro|explain|test|pack|help)\b\s*(.*)$/);
+  const match = line.match(/^\/(repro|explain|jht|test-repro|test-jht|test-explain|test|pack|help)\b\s*(.*)$/);
   if (!match || event.comment.user?.type === 'Bot') return output({ action: 'none' });
   const [, command, rest] = match;
   const maintainer = Maintainers.includes(event.comment.author_association);
+  const prOnly = ['test', 'pack', 'test-repro', 'test-jht', 'test-explain'];
 
   if (command === 'help') {
     await upsertComment(issue, `help-${event.comment.id}`, Help);
     return output({ action: 'none' });
   }
-  if (command === 'test' || command === 'pack') {
+  if (prOnly.includes(command)) {
     if (!isPr) {
       await upsertComment(issue, `error-${event.comment.id}`, `\`/${command}\` は Pull Request でだけ使えます。`);
       return output({ action: 'none' });
@@ -253,10 +243,38 @@ async function parse() {
     }
     await react('eyes');
     const pr = await gh('GET', `/pulls/${issue}`);
-    return output({ action: command, issue, sha: pr.head.sha, comment: event.comment.id });
+    if (command === 'test' || command === 'pack') {
+      return output({ action: command, issue, sha: pr.head.sha, comment: event.comment.id });
+    }
+    if (command === 'test-jht') {
+      const text = rest.trim().replace(/^`|`$/g, '');
+      if (!text) {
+        await upsertComment(issue, `error-${event.comment.id}`, '出てほしい文を書いてください (例: `/test-jht 私はgoogleが好きです` または `/test-jht 私はgoogleが好きです / わたしはgoogleがすきです`)。');
+        return output({ action: 'none' });
+      }
+      return output({ action: 'test-jht', issue, keys: text.slice(0, 500), last: '', reported: '', expected: '', kind: '', sha: pr.head.sha, comment: event.comment.id });
+    }
+    const words = rest.trim().split(/\s+/);
+    let last = 'enter';
+    if (command === 'test-repro' && ['space', 'enter', 'none'].includes(words.at(-1)) && words.length > 1) last = words.pop();
+    const keys = words.join(' ').replace(/^`|`$/g, '');
+    if (!isKeys(keys)) {
+      await upsertComment(issue, `error-${event.comment.id}`, `打ったキーを英字で書いてください (例: \`/${command} nihongowohanasu\`)。`);
+      return output({ action: 'none' });
+    }
+    return output({ action: command, issue, keys: keys.slice(0, MaxKeys), last, reported: '', expected: '', kind: '', sha: pr.head.sha, comment: event.comment.id });
   }
 
-  // /repro キー [space|enter|none]、/explain キー
+  if (command === 'jht') {
+    const text = rest.trim().replace(/^`|`$/g, '');
+    if (!text) {
+      await upsertComment(issue, `error-${event.comment.id}`, `出てほしい文を書いてください (例: \`/jht こんにちは\` または \`/jht 私はgoogleが好きです / わたしはgoogleがすきです\`)。\n\n${Help}`);
+      return output({ action: 'none' });
+    }
+    await react('eyes');
+    return output({ action: 'jht', issue, keys: text.slice(0, 500), last: '', reported: '', expected: '', kind: '', comment: event.comment.id });
+  }
+
   const words = rest.trim().split(/\s+/);
   let last = 'enter';
   if (command === 'repro' && ['space', 'enter', 'none'].includes(words.at(-1)) && words.length > 1) last = words.pop();
@@ -268,8 +286,6 @@ async function parse() {
   await react('eyes');
   return output({ action: command, issue, keys: keys.slice(0, MaxKeys), last, reported: '', expected: '', kind: '', comment: event.comment.id });
 }
-
-// --- 結果のコメント ---
 
 const asciiWords = text => (text ?? '').match(/[A-Za-z][A-Za-z'’-]*/g)?.map(w => w.toLowerCase()) ?? [];
 const sameWords = (a, b) => asciiWords(a).join(' ') === asciiWords(b).join(' ');
@@ -300,48 +316,89 @@ async function report() {
   const runUrl = `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
   const keys = process.env.BOT_KEYS;
 
-  if (action === 'repro') {
+  if (action === 'repro' || action === 'test-repro') {
     const versions = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.startsWith('repro-')).sort() : [];
     if (versions.length === 0) {
-      await upsertComment(issue, 'repro', `再現を試せませんでした ([実行結果](${runUrl}))。`);
+      await upsertComment(issue, process.env.BOT_COMMENT_ID ? `repro-${process.env.BOT_COMMENT_ID}` : 'repro', `再現を試せませんでした ([実行結果](${runUrl}))。`);
       return;
     }
     const reported = process.env.BOT_REPORTED, expected = process.env.BOT_EXPECTED, kind = process.env.BOT_KIND ?? '';
     const rows = [], verdicts = [];
+    let engine = '';
     for (const file of versions) {
       const name = file.replace(/^repro-/, '').replace(/\.json$/, '');
       const r = readJson(path.join(dir, file));
       if (!r) { rows.push(`| ${name} | (失敗) |`); continue; }
+      if (r.engine) engine = r.engine;
       const result = (r.committed ?? '') + (r.composing ?? '');
-      rows.push(`| ${name} | ${code(result)} |`);
-      if (name === 'main') verdicts.push(
-        expected && sameWords(result, expected) ? 'match' :
-        reported && sameWords(result, reported) ? 'reproduced' : 'different');
+      const extra = r.converted && r.converted !== result ? ` / Space: ${code(r.converted)}` : '';
+      rows.push(`| ${name} | ${code(result)}${extra} |`);
+      if (name === 'main' || name === 'pr') {
+        if (expected && (result === expected || r.converted === expected || sameWords(result, expected))) verdicts.push('match');
+        else if (reported && (result === reported || r.converted === reported || sameWords(result, reported))) verdicts.push('reproduced');
+        else verdicts.push('different');
+      }
     }
     const verdict = verdicts[0];
-    const conversion = /漢字/.test(kind);
+    const hasMozc = /Mozc/i.test(engine);
     const lines = [
-      `${code(keys)} を打ってみました (最後のキー: ${process.env.BOT_LAST})。`,
+      `${code(keys)} を打ってみました (最後のキー: ${process.env.BOT_LAST}${action === 'test-repro' ? `、PR ${process.env.BOT_SHA?.slice(0, 7)}` : ''})。`,
       '',
       '| 版 | 結果 |',
       '|---|---|',
       ...rows,
       '',
     ];
-    if (conversion) lines.push('漢字の変換はここでは再現できません (変換エンジンを使わず、日本語 / 英語の判定だけを見ています)。');
-    else if (verdict === 'reproduced') lines.push('🔁 報告と同じく、日本語と英語の分かれ方が期待と違いました。**再現しました。**');
-    else if (verdict === 'match') lines.push('✅ 最新のコード (main) では、日本語と英語の分かれ方は期待どおりでした。次の版で直っているかもしれません。');
-    else if (expected || reported) lines.push('報告とは違う結果になりました。アプリ・前後の文・学習 (以前に英字 / かなで確定した語) で変わることがあります。');
-    lines.push('', `<sub>Windows のスペルチェッカーあり、テスト用の変換エンジン (漢字にはしない)。[実行結果](${runUrl})</sub>`);
+    if (!hasMozc) lines.push('ℹ️ Mozc の変換ヘルパーが使えなかったため、**漢字変換は検証していません** (日本語 / 英語の判定と入力結果のみ)。');
+    else if (verdict === 'reproduced') lines.push('🔁 報告と同じ結果になりました。**再現しました。**');
+    else if (verdict === 'match') lines.push('✅ 最新のコードでは期待どおりでした。次の版で直っているかもしれません。');
+    else if (expected || reported) lines.push('報告とは違う結果になりました。アプリ・前後の文・学習で変わることがあります。');
+    lines.push('', `<sub>変換エンジン: ${engine || 'なし (判定だけ)'}。${!hasMozc ? '漢字の正しさは未確認。' : ''}[実行結果](${runUrl})</sub>`);
     await upsertComment(issue, process.env.BOT_COMMENT_ID ? `repro-${process.env.BOT_COMMENT_ID}` : 'repro', lines.join('\n'));
-    if (!conversion && verdict === 'reproduced') await gh('POST', `/issues/${issue}/labels`, { labels: ['再現済み'] });
+    if (verdict === 'reproduced') await gh('POST', `/issues/${issue}/labels`, { labels: ['再現済み'] }).catch(() => {});
     return;
   }
 
-  if (action === 'explain') {
+  if (action === 'explain' || action === 'test-explain') {
     const text = readText(path.join(dir, 'explain.txt'));
+    const head = action === 'test-explain' ? ` (PR ${process.env.BOT_SHA?.slice(0, 7)})` : '';
     await upsertComment(issue, `explain-${process.env.BOT_COMMENT_ID}`,
-      text ? `${code(keys)} の判定理由 (IME 自動切替):\n\n\`\`\`\n${text.trim()}\n\`\`\`` : `判定理由を出せませんでした ([実行結果](${runUrl}))。`);
+      text ? `${code(keys)} の判定理由 (IME 自動切替)${head}:\n\n\`\`\`\n${text.trim()}\n\`\`\`` : `判定理由を出せませんでした ([実行結果](${runUrl}))。`);
+    return;
+  }
+
+  if (action === 'jht' || action === 'test-jht') {
+    const data = readJson(path.join(dir, 'jht.json'));
+    if (!data) {
+      await upsertComment(issue, `jht-${process.env.BOT_COMMENT_ID}`, `jht を試せませんでした ([実行結果](${runUrl}))。`);
+      return;
+    }
+    if (data.error) {
+      await upsertComment(issue, `jht-${process.env.BOT_COMMENT_ID}`, `⚠️ ${data.error}\n\n漢字を含む文は \`/jht 文 / 読み\` の形で読みを書いてください (例: \`/jht 私はgoogleが好きです / わたしはgoogleがすきです\`)。\n\n[実行結果](${runUrl})`);
+      return;
+    }
+    const results = data.results ?? [];
+    const okLive = results.filter(r => r.liveOk).length;
+    const okFirst = results.filter(r => r.firstOk).length;
+    const rows = results.slice(0, 12).map(r => {
+      const mark = r.liveOk ? '✅' : r.firstOk ? '🔶' : '❌';
+      const note = (r.notes ?? []).slice(0, 2).join('; ');
+      return `| ${mark} ${code(r.keys)} | ${code(r.entered)} | ${code(r.first)} | ${note || ''} |`;
+    });
+    const head = action === 'test-jht' ? ` (PR ${process.env.BOT_SHA?.slice(0, 7)})` : '';
+    const lines = [
+      `**jht**${head}: ${code(data.expected)}`,
+      data.reading ? `読み: ${code(data.reading)}` : '',
+      `打ち方 ${results.length} 通り (Enter 一致 ${okLive}/${results.length}、Space 先頭 ${okFirst}/${results.length})。変換エンジン: ${data.engine ?? 'なし (判定だけ)'}${/Mozc/i.test(data.engine ?? '') ? '' : ' — **漢字変換は未検証**'}`,
+      '',
+      '| 打ち方 | Enter | Space 先頭 | メモ |',
+      '|---|---|---|---|',
+      ...rows,
+      results.length > 12 ? `| … | (残り ${results.length - 12} 通り) | | |` : '',
+      '',
+      `[実行結果](${runUrl})`,
+    ].filter(Boolean);
+    await upsertComment(issue, `jht-${process.env.BOT_COMMENT_ID}`, lines.join('\n'));
     return;
   }
 
@@ -361,7 +418,7 @@ async function report() {
   if (action === 'pack') {
     const ok = process.env.BOT_JOB_RESULT === 'success';
     await upsertComment(issue, `pack-${process.env.BOT_COMMENT_ID}`, ok
-      ? `📦 テスト版の zip を作りました (${process.env.BOT_SHA?.slice(0, 7)})。[実行結果](${runUrl}) の Artifacts の **meltype-pr-${issue}** からダウンロードできます (Windows 用、90 日間)。`
+      ? `📦 テスト版の zip を作りました (${process.env.BOT_SHA?.slice(0, 7)})。[実行結果](${runUrl}) の Artifacts の **meltype-pr-${issue}** からダウンロードできます (Windows 用)。`
       : `❌ zip を作れませんでした。[実行結果](${runUrl})`);
   }
 }

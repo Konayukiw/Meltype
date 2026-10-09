@@ -12,12 +12,62 @@ namespace Meltype.Composition;
 internal sealed class CompositionWindow : Form
 {
     private const int WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080, WS_EX_TOPMOST = 0x00000008;
-    private static readonly Color Background = Color.FromArgb(32, 34, 40);
-    private static readonly Color Accent = Color.FromArgb(76, 160, 255);
-    private Font _textFont = new("Yu Gothic UI", 13F);
-    private Font _candidateFont = new("Yu Gothic UI", 11F);
-    private Font _hintFont = new("Yu Gothic UI", 8.5F);
+    private Palette _palette = Palette.Dark;
+    private Color Background => _palette.Background;
+    private Color Accent => _palette.Accent;
+
+    /// <summary>変換ボックスの色の組み合わせ (設定の「変換ボックスの色」)。</summary>
+    private sealed record Palette(Color Background, Color Text, Color Candidate, Color Hint, Color Underline, Color Accent,
+        Color SuggestionEdge, Color SuggestionText, Color MeaningBackground, Color MeaningText)
+    {
+        public static readonly Palette Dark = new(Color.FromArgb(32, 34, 40), Color.White, Color.FromArgb(200, 200, 200), Color.FromArgb(150, 150, 150),
+            Color.FromArgb(170, 170, 170), Color.FromArgb(76, 160, 255), Color.FromArgb(255, 196, 0), Color.FromArgb(255, 220, 120),
+            Color.FromArgb(44, 47, 56), Color.FromArgb(225, 225, 225));
+
+        public static readonly Palette Light = new(Color.FromArgb(250, 250, 252), Color.FromArgb(20, 20, 24), Color.FromArgb(60, 60, 66), Color.FromArgb(105, 105, 112),
+            Color.FromArgb(120, 120, 120), Color.FromArgb(0, 103, 192), Color.FromArgb(214, 150, 0), Color.FromArgb(128, 80, 0),
+            Color.FromArgb(240, 242, 246), Color.FromArgb(30, 30, 30));
+    }
+
+    /// <summary>色 (ライト / ダーク) と不透明度。変わったときだけ描き直す。</summary>
+    public void SetAppearance(bool light, double opacity)
+    {
+        var palette = light ? Palette.Light : Palette.Dark;
+        opacity = Math.Clamp(opacity, 0.3, 1.0);
+        if (Math.Abs(Opacity - opacity) > 0.001)
+        {
+            Opacity = opacity;
+            if (_meaningPopup is not null) _meaningPopup.Opacity = opacity;
+        }
+        if (palette == _palette) return;
+        _palette = palette;
+        BackColor = palette.Background;
+        _meaningPopup?.SetPalette(palette);
+        Invalidate();
+    }
+
+    /// <summary>
+    /// Windows の「既定のアプリ モード」がライトか (HKCU\...\Themes\Personalize の AppsUseLightTheme)。読めなければ null。
+    /// </summary>
+    public static bool? WindowsUsesLightTheme()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            return key?.GetValue("AppsUseLightTheme") is int value ? value != 0 : null;
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return null;
+        }
+    }
+    private const string DefaultFamily = "Yu Gothic UI";
+    private Font _textFont = new(DefaultFamily, 13F);
+    private Font _candidateFont = new(DefaultFamily, 11F);
+    private Font _hintFont = new(DefaultFamily, 8.5F);
     private float _scale = 1F;
+    private string _family = DefaultFamily;
+    private string? _requestedFamily;
 
     /// <summary>文字の大きさの倍率 (1 = 打った文字が 13pt)。変わったときだけ作り直す。</summary>
     public void SetScale(float scale)
@@ -25,13 +75,37 @@ internal sealed class CompositionWindow : Form
         scale = Math.Clamp(scale, 0.6F, 2F);
         if (Math.Abs(scale - _scale) < 0.01F) return;
         _scale = scale;
+        RebuildFonts();
+    }
+
+    /// <summary>フォント (設定の「変換ボックスのフォント」)。空・この PC に無いフォントなら既定のフォント。変わったときだけ作り直す。</summary>
+    public void SetFontFamily(string? name)
+    {
+        name = name?.Trim() ?? "";
+        if (name == _requestedFamily) return;
+        _requestedFamily = name;
+        var family = name.Length > 0 && IsInstalled(name) ? name : DefaultFamily;
+        if (name.Length > 0 && family != name) Diagnostics.Log.Warn($"変換ボックスのフォント「{name}」がこの PC に無いので、{DefaultFamily} で出します。");
+        if (family == _family) return;
+        _family = family;
+        RebuildFonts();
+    }
+
+    private static bool IsInstalled(string name)
+    {
+        using var fonts = new System.Drawing.Text.InstalledFontCollection();
+        return fonts.Families.Any(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void RebuildFonts()
+    {
         _textFont.Dispose();
         _candidateFont.Dispose();
         _hintFont.Dispose();
-        _textFont = new Font("Yu Gothic UI", 13F * scale);
-        _candidateFont = new Font("Yu Gothic UI", 11F * scale);
+        _textFont = new Font(_family, 13F * _scale);
+        _candidateFont = new Font(_family, 11F * _scale);
         // 案内の文字は小さくしすぎると読めないので、縮めるのは少しだけ
-        _hintFont = new Font("Yu Gothic UI", 8.5F * Math.Max(scale, 0.9F));
+        _hintFont = new Font(_family, 8.5F * Math.Max(_scale, 0.9F));
     }
 
     /// <summary>倍率 1 のときの、打った文字の行の高さ (ピクセル)。</summary>
@@ -39,7 +113,7 @@ internal sealed class CompositionWindow : Form
 
     private static int MeasureBaseHeight()
     {
-        using var font = new Font("Yu Gothic UI", 13F);
+        using var font = new Font(DefaultFamily, 13F);
         return font.Height;
     }
     private CompositionView? _view;
@@ -74,19 +148,33 @@ internal sealed class CompositionWindow : Form
     public Point TextOffset => new(10, 8 + _textFont.Height / 2);
 
     /// <param name="overlay">anchor が入力位置に重ねる位置か。画面の下からはみ出すときは、候補の一覧が入るだけ上にずらす。</param>
-    public void ShowView(CompositionView view, Point? anchor, bool overlay = false)
+    /// <param name="above">anchor が入力位置の上 (変換ボックスの左下の角を置く位置) か。候補の一覧が出て高くなっても下の端をそろえる。
+    /// 画面の上に入らなければ belowY (入力位置の下) に出す。</param>
+    public void ShowView(CompositionView view, Point? anchor, bool overlay = false, bool above = false, int belowY = 0)
     {
         _view = view;
         var size = Measure(view);
+        if (anchor is not null) _above = above ? (anchor.Value.Y, belowY) : null;
         var location = anchor ?? Location;
         // 画面からはみ出さないようにする。
         var screen = Screen.FromPoint(location).WorkingArea;
+        if (_above is { } a) location.Y = a.Bottom - size.Height >= screen.Top ? a.Bottom - size.Height : a.BelowY;
         if (location.X + size.Width > screen.Right) location.X = Math.Max(screen.Left, screen.Right - size.Width);
         if (location.Y + size.Height > screen.Bottom) location.Y = overlay ? Math.Max(screen.Top, screen.Bottom - size.Height) : Math.Max(screen.Top, location.Y - size.Height - 28);
         SetBounds(location.X, location.Y, size.Width, size.Height);
         if (!Visible) Show();
         Invalidate();
         UpdateMeaning(view);
+    }
+
+    /// <summary>入力位置の上に出しているときの、変換ボックスの下の端と、上に入らないときに出す位置 (入力位置の下)。</summary>
+    private (int Bottom, int BelowY)? _above;
+
+    /// <summary>打った文字の大きさで text を描いたときの幅 (ピクセル)。</summary>
+    public int TextWidth(string text)
+    {
+        using var g = CreateGraphics();
+        return TextRenderer.MeasureText(g, text, _textFont, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Width;
     }
 
     /// <summary>「もしかして」の行の高さ。</summary>
@@ -120,7 +208,7 @@ internal sealed class CompositionWindow : Form
     {
         _meaningTimer.Stop();
         if (_view is not { Meaning: { } meaning } view || !Visible) return;
-        _meaningPopup ??= new MeaningPopup();
+        _meaningPopup ??= new MeaningPopup(_palette, Opacity);
         _meaningPopup.SetText(meaning, _candidateFont);
         PlaceMeaning(view);
         if (!_meaningPopup.Visible) _meaningPopup.Show();
@@ -154,15 +242,25 @@ internal sealed class CompositionWindow : Form
     {
         private string _text = "";
         private Font? _font;
+        private Palette _palette;
 
-        public MeaningPopup()
+        public MeaningPopup(Palette palette, double opacity)
         {
+            _palette = palette;
+            Opacity = opacity;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            BackColor = Color.FromArgb(44, 47, 56);
+            BackColor = palette.MeaningBackground;
             DoubleBuffered = true;
+        }
+
+        public void SetPalette(Palette palette)
+        {
+            _palette = palette;
+            BackColor = palette.MeaningBackground;
+            Invalidate();
         }
 
         protected override bool ShowWithoutActivation => true;
@@ -188,12 +286,16 @@ internal sealed class CompositionWindow : Form
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            using (var border = new Pen(Color.FromArgb(110, 76, 160, 255))) e.Graphics.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
+            using (var border = new Pen(Color.FromArgb(110, _palette.Accent))) e.Graphics.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
             if (_font is null) return;
-            TextRenderer.DrawText(e.Graphics, _text, _font, new Rectangle(8, 5, Width - 16, Height - 10), Color.FromArgb(225, 225, 225),
+            TextRenderer.DrawText(e.Graphics, _text, _font, new Rectangle(8, 5, Width - 16, Height - 10), _palette.MeaningText,
                 TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak);
         }
     }
+
+    /// <summary>打ったキーを出すか。見えている文字と同じ (英字のまま) なら出さない。</summary>
+    private static string? ShowsTyped(CompositionView view) =>
+        view.Typed is { Length: > 0 } typed && typed != view.Text ? typed : null;
 
     private Size Measure(CompositionView view)
     {
@@ -205,6 +307,11 @@ internal sealed class CompositionWindow : Form
             width = Math.Max(width, clausesWidth + 20);
         }
         var height = _textFont.Height + 16;
+        if (ShowsTyped(view) is { } typed)
+        {
+            width = Math.Max(width, TextRenderer.MeasureText(g, typed, _hintFont).Width + 20);
+            height += _hintFont.Height + 2;
+        }
         if (view.Suggestion is { } suggestion)
         {
             width = Math.Max(width, TextRenderer.MeasureText(g, suggestion, _candidateFont).Width + 32);
@@ -221,6 +328,12 @@ internal sealed class CompositionWindow : Form
             height += Math.Min(view.Candidates.Count, PageSize) * (_candidateFont.Height + 4) + 6;
             // 2 ページ以上あるときは、下に「3 / 27」を出す分
             if (view.Candidates.Count > PageSize) height += _hintFont.Height + 2;
+        }
+        else if (view.Predictions is { Count: > 0 } predictions)
+        {
+            // 予測変換の候補 (番号は付けない。Tab で選ぶ)
+            foreach (var prediction in predictions) width = Math.Max(width, TextRenderer.MeasureText(g, $"▸ {prediction}", _candidateFont).Width + 28);
+            height += predictions.Count * (_candidateFont.Height + 4) + 6;
         }
         width = Math.Max(width, TextRenderer.MeasureText(g, view.Hint, _hintFont).Width + 16);
         height += _hintFont.Height + 6;
@@ -247,11 +360,11 @@ internal sealed class CompositionWindow : Form
                 var selected = i == view.SelectedClause;
                 if (selected)
                 {
-                    using var highlight = new SolidBrush(Color.FromArgb(90, 76, 160, 255));
+                    using var highlight = new SolidBrush(Color.FromArgb(90, Accent));
                     g.FillRectangle(highlight, x - 1, y - 1, width + 2, _textFont.Height + 2);
                 }
-                DrawText(g, clauses[i], _textFont, new Point(x, y), Color.White, selected ? Blend(Background, Color.FromArgb(90, 76, 160, 255)) : Background, flags);
-                using (var underline = new Pen(selected ? Accent : Color.FromArgb(170, 170, 170), selected ? 3 : 1))
+                DrawText(g, clauses[i], _textFont, new Point(x, y), _palette.Text, selected ? Blend(Background, Color.FromArgb(90, Accent)) : Background, flags);
+                using (var underline = new Pen(selected ? Accent : _palette.Underline, selected ? 3 : 1))
                 {
                     g.DrawLine(underline, x + 1, y + _textFont.Height + 1, x + width - 2, y + _textFont.Height + 1);
                 }
@@ -261,23 +374,30 @@ internal sealed class CompositionWindow : Form
         }
         else
         {
-            DrawText(g, view.Text, _textFont, new Point(10, y), Color.White, Background, TextFormatFlags.NoPrefix);
+            DrawText(g, view.Text, _textFont, new Point(10, y), _palette.Text, Background, TextFormatFlags.NoPrefix);
             var textWidth = TextRenderer.MeasureText(g, view.Text, _textFont).Width;
             y += _textFont.Height;
-            using (var underline = new Pen(Color.White, 1) { DashStyle = DashStyle.Dot })
+            using (var underline = new Pen(_palette.Text, 1) { DashStyle = DashStyle.Dot })
             {
                 g.DrawLine(underline, 12, y, 10 + textWidth - 4, y);
             }
             y += 8;
         }
 
+        if (ShowsTyped(view) is { } typed)
+        {
+            // 打ったキー (設定「打ったキーを表示」): 打ち間違いに気づけるように、文字の下に小さく出す
+            TextRenderer.DrawText(g, typed, _hintFont, new Point(10, y - 2), _palette.Hint, TextFormatFlags.NoPrefix);
+            y += _hintFont.Height + 2;
+        }
+
         if (view.Suggestion is { } suggestion)
         {
             // もしかして: 打った文字のすぐ下に目立つように (Tab で直せる)
             var box = new Rectangle(6, y - 2, Width - 12, SuggestionHeight - 4);
-            using (var fill = new SolidBrush(Color.FromArgb(70, 255, 196, 0))) g.FillRectangle(fill, box);
-            using (var edge = new Pen(Color.FromArgb(255, 196, 0))) g.DrawRectangle(edge, box);
-            TextRenderer.DrawText(g, suggestion, _candidateFont, new Point(12, y + 1), Color.FromArgb(255, 220, 120), TextFormatFlags.NoPrefix);
+            using (var fill = new SolidBrush(Color.FromArgb(70, _palette.SuggestionEdge))) g.FillRectangle(fill, box);
+            using (var edge = new Pen(_palette.SuggestionEdge)) g.DrawRectangle(edge, box);
+            TextRenderer.DrawText(g, suggestion, _candidateFont, new Point(12, y + 1), _palette.SuggestionText, TextFormatFlags.NoPrefix);
             y += SuggestionHeight;
         }
 
@@ -291,12 +411,12 @@ internal sealed class CompositionWindow : Form
                 var rowHeight = _candidateFont.Height + 4;
                 if (i == view.SelectedIndex)
                 {
-                    using var highlight = new SolidBrush(Color.FromArgb(60, 76, 160, 255));
+                    using var highlight = new SolidBrush(Color.FromArgb(60, Accent));
                     g.FillRectangle(highlight, 4, y - 2, Width - 8, rowHeight);
                 }
                 DrawText(g, $"{i - first + 1}  {view.Candidates[i]}", _candidateFont, new Point(12, y),
-                    i == view.SelectedIndex ? Color.White : Color.FromArgb(200, 200, 200),
-                    i == view.SelectedIndex ? Blend(Background, Color.FromArgb(60, 76, 160, 255)) : Background, TextFormatFlags.NoPrefix);
+                    i == view.SelectedIndex ? _palette.Text : _palette.Candidate,
+                    i == view.SelectedIndex ? Blend(Background, Color.FromArgb(60, Accent)) : Background, TextFormatFlags.NoPrefix);
                 if (view.Notes?.ElementAtOrDefault(i) is { } note)
                 {
                     // 英訳の候補: 右端に小さく「英訳」
@@ -311,12 +431,30 @@ internal sealed class CompositionWindow : Form
                 y = listTop + PageSize * (_candidateFont.Height + 4);
                 var page = $"{Math.Max(0, view.SelectedIndex) + 1} / {view.Candidates.Count}";
                 var pageWidth = TextRenderer.MeasureText(g, page, _hintFont).Width;
-                TextRenderer.DrawText(g, page, _hintFont, new Point(Width - pageWidth - 10, y + 1), Color.FromArgb(150, 150, 150), TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, page, _hintFont, new Point(Width - pageWidth - 10, y + 1), _palette.Hint, TextFormatFlags.NoPrefix);
                 y += _hintFont.Height + 2;
             }
             y += 6;
         }
-        TextRenderer.DrawText(g, view.Hint, _hintFont, new Point(8, y), Color.FromArgb(150, 150, 150), TextFormatFlags.NoPrefix);
+        else if (view.Predictions is { Count: > 0 } predictions)
+        {
+            for (var i = 0; i < predictions.Count; i++)
+            {
+                var rowHeight = _candidateFont.Height + 4;
+                var selected = i == view.SelectedPrediction;
+                if (selected)
+                {
+                    using var highlight = new SolidBrush(Color.FromArgb(60, Accent));
+                    g.FillRectangle(highlight, 4, y - 2, Width - 8, rowHeight);
+                }
+                DrawText(g, $"{(selected ? "▸" : "  ")} {predictions[i]}", _candidateFont, new Point(12, y),
+                    selected ? _palette.Text : _palette.Candidate,
+                    selected ? Blend(Background, Color.FromArgb(60, Accent)) : Background, TextFormatFlags.NoPrefix);
+                y += rowHeight;
+            }
+            y += 6;
+        }
+        TextRenderer.DrawText(g, view.Hint, _hintFont, new Point(8, y), _palette.Hint, TextFormatFlags.NoPrefix);
     }
 
     /// <summary>

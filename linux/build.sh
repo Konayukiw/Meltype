@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yukishiro
 #
-# Meltype の Linux 版 (IBus) を組み立てる。できたものは linux/build/Meltype-linux/ に置く。
+# Meltype の Linux 版 (IBus・fcitx5) を組み立てる。できたものは linux/build/Meltype-linux/ に置く。
 #   linux/build.sh
 # 先に Mozc の変換ヘルパーを native/mozc/build-mozc-helper.sh でビルドしておく (native/mozc/bin/linux/)。
 # 必要なもの: .NET 10 SDK、clang (NativeAOT のリンクに使う)、zlib (zlib1g-dev)
+# fcitx5 のアドオンは、cmake と fcitx5 の開発用のパッケージ (fcitx5-modules-dev) があればビルドする (無ければ IBus だけ)。
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(dirname "$here")"
@@ -25,14 +26,24 @@ fi
 rm -rf "$here/build"
 mkdir -p "$out/mozc"
 
-echo "== 1/2 本体 (C#, NativeAOT) をビルド"
+echo "== 1/3 本体 (C#, NativeAOT) をビルド"
 # リポジトリの nuget.config は NuGet を使わない設定 (Windows の開発環境用) なので、NativeAOT のコンパイラを取るために nuget.org を指定する。
 dotnet publish "$root/src/Meltype.Mac.Native/Meltype.Mac.Native.csproj" -c Release -r "$rid" \
     -p:PublishAot=true -p:NativeLib=Shared -p:StripSymbols=true \
     --source https://api.nuget.org/v3/index.json -o "$here/build/native"
 cp "$here/build/native/MeltypeNative.so" "$out/libMeltypeNative.so"
 
-echo "== 2/2 組み立て"
+echo "== 2/3 fcitx5 のアドオン"
+if command -v cmake > /dev/null && pkg-config --exists Fcitx5Core 2> /dev/null; then
+    cmake -S "$here/fcitx5" -B "$here/build/fcitx5" -DMELTYPE_DIR=/opt/meltype -DCMAKE_BUILD_TYPE=Release > /dev/null
+    cmake --build "$here/build/fcitx5" > /dev/null
+    mkdir -p "$out/fcitx5"
+    cp "$here/build/fcitx5/meltype.so" "$here/fcitx5/meltype-addon.conf" "$here/fcitx5/meltype.conf" "$out/fcitx5/"
+else
+    echo "fcitx5 の開発用のパッケージ (fcitx5-modules-dev) か cmake が無いので、fcitx5 のアドオンは入れません (IBus だけ)。"
+fi
+
+echo "== 3/3 組み立て"
 cp "$here/ibus-engine-meltype" "$here/meltype.xml" "$here/icon.png" "$here/install.sh" "$here/uninstall.sh" "$out/"
 cp "$here/TESTER-README.txt" "$out/はじめにお読みください.txt"
 cp "$root/LICENSE" "$root/THIRD-PARTY-NOTICES.md" "$out/"

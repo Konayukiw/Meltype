@@ -28,3 +28,8 @@ mac/build/
 native/mozc/bin/
 linux/build/
 tools/data/
+native/tip/bin/
+native/tip/obj/
+
+# Python のキャッシュ (tools/*.py を動かすと作られる)
+__pycache__/

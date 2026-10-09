@@ -268,4 +268,54 @@ internal static class DetectionTests
             Diagnostics.Log.RecordText = before;
         }
     }
+
+    [Test]
+    public static void CustomRomajiTable_ExtendsSpellings()
+    {
+        // 拡張ローマ字 (AZIK) をユーザーのローマ字の表 (romaji.txt) で足せる (issue #125)
+        var table = RomajiDetector.ParseCustomTable("# AZIK の一部\nkz\tかん\nkk\tきん\nkq\tかい\nsh すう\nbad;\tだめ\n");
+        Assert.True(!table.ContainsKey("bad;"), "英字以外を含む綴りは読まない");
+        var romaji = new RomajiDetector(table);
+        Assert.Equal("かんじ", romaji.AnalyzeFragment("kzji").Kana);
+        Assert.Equal("きんし", romaji.AnalyzeFragment("kksi").Kana + romaji.AnalyzeFragment("kksi").Partial, "kk は っ ではなく表の きん");
+        Assert.Equal("かいしゃ", romaji.AnalyzeFragment("kqsya").Kana);
+        var partial = romaji.AnalyzeFragment("k");
+        Assert.True(partial.IsValid && partial.Partial == "k", "表の綴りの打ちかけは続きを待つ");
+        // 表に無い綴りは今までどおり
+        Assert.Equal("かった", romaji.AnalyzeFragment("katta").Kana);
+        Assert.Equal("きっく", new RomajiDetector().AnalyzeFragment("kikku").Kana, "表が無ければ kk は っ");
+        var plain = new RomajiDetector();
+        Assert.Equal("しんぶん", plain.AnalyzeFragment("shinnbunn").Kana, "表が無ければ sh・nn も今までどおり");
+        Assert.Equal("ん", plain.AnalyzeFragment("nn").Kana);
+    }
+
+    [Test]
+    public static void CustomRomajiTable_AzikSampleKeepsCommonSpellings()
+    {
+        // 同梱の AZIK の例 (docs/romaji-azik-sample.txt) を読んでも、ふつうのローマ字の語は今までどおり読める (AZIK では sh は すう なので し は si)
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "docs", "romaji-azik-sample.txt"))) dir = Path.GetDirectoryName(dir);
+        Assert.True(dir is not null, "docs/romaji-azik-sample.txt が見つからない");
+        var table = RomajiDetector.ParseCustomTable(File.ReadAllText(Path.Combine(dir!, "docs", "romaji-azik-sample.txt")));
+        Assert.True(table.Count >= 50, "例の綴りを読む: " + table.Count);
+        var romaji = new RomajiDetector(table);
+        foreach (var (typed, kana) in new[] { ("arigatou", "ありがとう"), ("nihongo", "にほんご"), ("watasi", "わたし"), ("katta", "かった"), ("kz", "かん") })
+            Assert.Equal(kana, romaji.AnalyzeFragment(typed).Kana, typed);
+    }
+
+    [Test]
+    public static void CustomRomajiTable_LoadsFromUserDirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"meltype-romaji-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "romaji.txt"), "kz\tかん\n");
+            var detector = Composition.CompositionDetector.CreateDefault(dir);
+            var text = new Composition.CompositionText(detector);
+            foreach (var c in "kzji") text.Append(c);
+            Assert.Equal("かんじ", text.Display(final: true));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
 }

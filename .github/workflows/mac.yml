@@ -12,16 +12,28 @@ on:
       - 'src/Meltype.Core/**'
       - 'src/Meltype.Mac.Native/**'
       - 'dictionaries/**'
+      - 'tools/test-native-boundaries.py'
+      - 'tools/test-mac-boundaries.*'
+      - 'tools/test-mac-events.*'
       - '.github/workflows/mac.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   app:
     runs-on: macos-15
+    timeout-minutes: 60
+    # タグ時の softprops/action-gh-release 用。permissions は式が使えないため常に write。
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: 10.0.x
       - name: Tools
@@ -30,7 +42,7 @@ jobs:
           swift --version
           dotnet --version
       # azooKey の変換エンジンと辞書 (Swift Package) は大きいので、次からはキャッシュを使う。
-      - uses: actions/cache@v4
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: mac/.build
           key: mac-swiftpm-${{ hashFiles('mac/Package.swift', 'mac/Package.resolved') }}
@@ -58,6 +70,11 @@ jobs:
       - name: Build
         working-directory: mac
         run: ./build.sh --no-install
+      - name: NativeAOT and Swift boundary tests
+        run: |
+          python3 tools/test-native-boundaries.py mac/build/Meltype.app/Contents/Frameworks/libMeltypeNative.dylib
+          python3 tools/test-mac-boundaries.py mac/build/Meltype.app/Contents/Frameworks/libMeltypeNative.dylib
+          python3 tools/test-mac-events.py mac/build/Meltype.app/Contents/Frameworks/libMeltypeNative.dylib
       # 公証 (notarization): 署名したときだけ。秘密 NOTARY_APPLE_ID・NOTARY_TEAM_ID・NOTARY_PASSWORD (App 用パスワード)
       - name: Notarize
         if: env.MELTYPE_MAC_IDENTITY != ''
@@ -71,21 +88,16 @@ jobs:
           xcrun stapler staple mac/build/Meltype.app
       - name: Package
         run: |
-          mkdir -p dist/Meltype-mac
-          cp -R mac/build/Meltype.app dist/Meltype-mac/
-          cp mac/install.sh "mac/Install Meltype.command" dist/Meltype-mac/
-          cp mac/TESTER-README.txt "dist/Meltype-mac/はじめにお読みください.txt"
-          cp LICENSE THIRD-PARTY-NOTICES.md dist/Meltype-mac/
-          chmod +x dist/Meltype-mac/install.sh "dist/Meltype-mac/Install Meltype.command"
           # タグ (v1.0.0) なら Meltype-1.0.0-mac.zip、それ以外はテスト版の名前
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then name="Meltype-${GITHUB_REF_NAME#v}-mac.zip"; else name="Meltype-mac-test-$(date +%Y%m%d-%H%M).zip"; fi
-          (cd dist && ditto -c -k --keepParent Meltype-mac "$name")
+          bash mac/package.sh "$name"
           ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: meltype-mac
           path: dist/Meltype-*.zip
+          retention-days: 14
       - if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         with:
           files: dist/Meltype-*.zip

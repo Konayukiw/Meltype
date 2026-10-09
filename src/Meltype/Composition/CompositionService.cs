@@ -18,6 +18,9 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     private readonly Func<bool> _showIndicator;
     private readonly Func<Config.CompositionPlacement> _placement;
     private readonly Func<Config.CompositionSize> _size;
+    private readonly Func<string> _font;
+    private readonly Func<bool> _lightTheme;
+    private readonly Func<double> _opacity;
     private readonly Func<bool> _directMode;
     private readonly MsImeKanjiConverter _converter = new();
     private readonly KeyInjector _injector = new();
@@ -60,17 +63,28 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             Translations = options.Translations ?? TranslationDictionary.Load(),
             TranslationCandidates = options.TranslationCandidates,
             CandidateMeanings = options.CandidateMeanings,
+            ShowTypedKeys = options.ShowTypedKeys,
             Meanings = options.Meanings ?? MeaningDictionary.Load(),
             RomajiTypos = options.RomajiTypos ?? RomajiTypoCorrector.Load(detector.Romaji),
             CorrectTypos = options.CorrectTypos,
+            SlashAsMiddleDot = options.SlashAsMiddleDot,
+            SpaceAroundEnglish = options.SpaceAroundEnglish,
+            Punctuation = options.Punctuation,
             TranslationHistory = options.TranslationHistory ?? new TranslationHistory(Config.AppPaths.TranslationHistoryFile),
+            Predictor = options.Predictor ?? new Predictor(new PhraseHistory(Config.AppPaths.PhraseHistoryFile), UserDictionary, History),
+            Predictions = options.Predictions,
         };
+        Phrases = resolved.Predictor?.Phrases;
         _hybrid = new HybridConverter(options.Engine, _mozc, _converter, reading => _windowsCandidates.Get(reading));
+        _resolved = resolved;
         Controller = new CompositionController(Gate, detector, _hybrid, this, resolved);
         if (options.Engine() != Config.ConversionEngine.System && _mozc.IsInstalled) _mozc.WarmUp();
         _showIndicator = options.ModeIndicator;
         _placement = options.Placement;
         _size = options.Size;
+        _font = options.Font;
+        _lightTheme = options.LightTheme;
+        _opacity = options.Opacity;
         _directMode = options.DirectMode;
         var onFocus = options.ModeIndicatorOnFocus;
         Focus.TextInputEntered += () => { if (onFocus()) ShowMode(!_directMode()); };
@@ -82,6 +96,15 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     public CaptureGate Gate { get; }
 
+    private readonly CompositionOptions _resolved;
+
+    /// <summary>
+    /// Meltype IME (TSF) の入力欄 1 つ分の入力の本体を作る。辞書・学習データ・変換エンジンは変換ボックスと共有する
+    /// (UI スレッドからだけ使うので排他は要らない)。英数状態は IME の ON/OFF で決まるので、フック用の英数の判定は外す。
+    /// </summary>
+    public MeltypeSession CreateSession(Func<Config.Settings> settings) =>
+        new(_detector, _hybrid, _resolved with { DirectMode = () => false, ClassifyDirect = null, DirectDecided = null }, settings);
+
     public CompositionController Controller { get; }
 
     /// <summary>入力言語による制限。フックで保留した後・タイマーで判定する前にも確かめる。</summary>
@@ -92,6 +115,9 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     /// <summary>ユーザーが英字 / かなに直した語の学習 (トレイの「学習データをリセット」で消す)。</summary>
     public LanguageMemory Languages { get; }
+
+    /// <summary>予測変換のために覚えた、確定した語句。</summary>
+    public PhraseHistory? Phrases { get; }
 
     /// <summary>ユーザー辞書 (トレイの「ユーザー辞書...」で編集する)。</summary>
     public UserDictionary UserDictionary { get; }
@@ -259,6 +285,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     public void CommitText(string text)
     {
+        // 変換ボックスを出したまま確定して、続けて打っている (kyouha Space iitenki): 次に見せるときに、確定した分だけ右へずらす
+        if (_window.Visible) _committedWhileVisible += text;
         EnsureSystemImeClosed();
         if (PasteCommit() && TryPaste(text))
         {
@@ -376,6 +404,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     public void DeleteBackward(int count)
     {
         if (count <= 0) return;
+        // Microsoft IME が ON のままだと、BackSpace と後から送る文字の順番が入れ替わることがある (issue #227: wanI t)
+        EnsureSystemImeClosed();
         for (var i = 0; i < count; i++) KeyReplayed?.Invoke(new KeyEvent(VirtualKeys.Back, 0, false, false, false, 0));
         var events = new List<KeyEvent>(count * 2);
         for (var i = 0; i < count; i++)
@@ -384,6 +414,35 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             events.Add(new KeyEvent(VirtualKeys.Back, 0, false, true, false, 0));
         }
         _injector.Inject(events);
+    }
+
+    /// <summary>
+    /// 確定し直し: BackSpace と新しい文字を 1 回の SendInput でまとめて送る (間に物理キーやほかの入力が割り込まないように。issue #227)。
+    /// 貼り付けで入れるアプリでは、消してから貼り付ける。
+    /// </summary>
+    public void ReplaceBackward(int count, string text)
+    {
+        if (count <= 0 || PasteCommit())
+        {
+            DeleteBackward(count);
+            CommitText(text);
+            return;
+        }
+        if (_window.Visible) _committedWhileVisible += text;
+        EnsureSystemImeClosed();
+        for (var i = 0; i < count; i++) KeyReplayed?.Invoke(new KeyEvent(VirtualKeys.Back, 0, false, false, false, 0));
+        var inputs = new List<Native.INPUT>(count * 2 + text.Length * 2);
+        for (var i = 0; i < count; i++)
+        {
+            inputs.Add(KeyInput(VirtualKeys.Back, up: false));
+            inputs.Add(KeyInput(VirtualKeys.Back, up: true));
+        }
+        foreach (var c in text)
+        {
+            inputs.Add(UnicodeInput(c, up: false));
+            inputs.Add(UnicodeInput(c, up: true));
+        }
+        Native.SendAll(inputs.ToArray(), "確定し直し");
     }
 
     public void RequestSurroundingText(Action<string?, string?> callback)
@@ -455,13 +514,32 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// <summary>入力位置の高さとして信じる上限 (ピクセル)。これより高いのは入力欄や行全体の四角形。</summary>
     private const int MaxLineHeight = 48;
 
+    /// <summary>変換ボックスを出したまま確定した文字 (次に見せるときに、その幅だけ変換ボックスを右へずらす)。</summary>
+    private string _committedWhileVisible = "";
+
     public void Show(CompositionView view)
     {
         if (_window.Visible)
         {
-            _window.ShowView(view, null);
-            return;
+            // 確定した文字の分だけ右へ (同じ位置のままだと、確定した文字を変換ボックスが隠してしまう: issue #57)。
+            // 入力欄のキャレットは確定した文字の入力が終わるまで動かないことがあるので、確定した文字の幅で動かす。
+            // 改行を含むとき・右へずらすと画面の外に出るとき (折り返し) は、ずらさずに入力欄のキャレットの位置を取り直す。
+            Point? moved = null;
+            var committed = _committedWhileVisible;
+            _committedWhileVisible = "";
+            if (committed.Length > 0)
+            {
+                var x = _window.Left + _window.TextWidth(committed);
+                var screen = Screen.FromPoint(new Point(_window.Left, _window.Top)).WorkingArea;
+                if (!committed.Contains('\n') && x + _window.Width <= screen.Right) moved = new Point(x, _window.Top);
+            }
+            if (committed.Length == 0 || moved is not null)
+            {
+                _window.ShowView(view, moved);
+                return;
+            }
         }
+        _committedWhileVisible = "";
         var caret = FindCaret();
         // 入力欄が空のとき、アプリによっては入力位置ではなく入力欄の枠 (40px の欄など) や、複数行の欄全体の四角形が返る。
         // 枠と同じ高さなら、文字の高さは枠のおよそ半分 (1 行の欄の文字は上下の真ん中にある)。高すぎる四角形は、文字の高さが分からない。
@@ -475,11 +553,15 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             { } c => c.Height,
         };
         Diagnostics.Log.Info($"変換ボックスを出す入力位置: {(caret is { } r ? $"{r.X},{r.Y} 高さ {r.Height}{(wholeField ? " (入力欄の枠)" : "")}" : "分からない")}");
+        _window.SetFontFamily(_font());
+        _window.SetAppearance(_lightTheme(), _opacity());
         // 文字の大きさ: 自動なら、入力欄の文字の高さに合わせる。小さな入力欄で大きく出すぎないように。
         _window.SetScale(_size() switch
         {
             Config.CompositionSize.Small => 0.8F,
             Config.CompositionSize.Large => 1.25F,
+            Config.CompositionSize.ExtraLarge => 1.6F,
+            Config.CompositionSize.Huge => 2F,
             Config.CompositionSize.Auto when textHeight is { } h && h >= 8 => Math.Clamp((float)h / _window.BaseTextHeight, 0.7F, 1.4F),
             // 文字の高さが分からないときは、ふつうの画面の文字 (16px 前後) に近い大きさ
             Config.CompositionSize.Auto => 0.8F,
@@ -506,11 +588,18 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             _window.ShowView(view, new Point(at.Left - offset.X, at.Top + middle - offset.Y), overlay: true);
             return;
         }
+        // カーソルの上: 入力位置の上に出す (候補の一覧で入力欄や下の行を隠さない)。
+        if (_placement() == Config.CompositionPlacement.AboveCaret && caret is { } line)
+        {
+            _window.ShowView(view, new Point(line.Left, line.Top - 4), above: true, belowY: FindAnchor(caret).Y);
+            return;
+        }
         _window.ShowView(view, FindAnchor(caret));
     }
 
     public void Hide()
     {
+        _committedWhileVisible = "";
         if (_window.Visible) _window.Hide();
     }
 
@@ -602,13 +691,32 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     private Point FindAnchor(Rectangle? caret = null)
     {
         if ((caret ?? FindCaret()) is { } found) return new Point(found.Left, found.Bottom + 4);
-        if (Focus.Current.Bounds is { } bounds && bounds.Height is > 0 and < 120)
+        // 入力欄の四角形が潰れている・画面の外にある (Google ドキュメントの、文字を受け取るための見えない欄など) ときは、
+        // その左下に出すと画面の端や関係ない所に出てしまう (issue #128)。マウスカーソルの近くに出す。
+        if (Focus.Current.Bounds is { } bounds && bounds.Height is > 2 and < 120 && bounds.Width > 2 && IsOnScreen(bounds))
         {
             return new Point(bounds.Left, bounds.Bottom + 2);
         }
         Native.GetCursorPos(out var cursor);
         return new Point(cursor.X + 12, cursor.Y + 20);
     }
+
+    private static bool IsOnScreen(Rectangle bounds) => Screen.AllScreens.Any(s => s.Bounds.IntersectsWith(bounds));
+
+    /// <summary>仮想キーの打鍵 (確定し直しの BackSpace)。KeyInjector と同じく、Meltype が送ったキーの印を付ける。</summary>
+    private static Native.INPUT KeyInput(int vk, bool up) => new()
+    {
+        type = Native.INPUT_KEYBOARD,
+        u = new Native.InputUnion
+        {
+            ki = new Native.KEYBDINPUT
+            {
+                wVk = (ushort)vk,
+                dwFlags = up ? Native.KEYEVENTF_KEYUP : 0,
+                dwExtraInfo = KeyboardMonitor.InjectedMarker,
+            },
+        },
+    };
 
     private static Native.INPUT UnicodeInput(char c, bool up) => new()
     {

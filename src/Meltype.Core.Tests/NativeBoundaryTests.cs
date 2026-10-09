@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 0924haruto12
+
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using Meltype.Composition;
+using Meltype.Config;
+using Meltype.Input;
+using Meltype.Mac;
+
+namespace Meltype.Tests;
+
+/// <summary>C ABI の実際の入口を呼ぶ。辞書・学習データはスタブで、ユーザーの設定を読み書きしない。</summary>
+internal static unsafe class NativeBoundaryTests
+{
+    private sealed class NativeSession : IDisposable
+    {
+        public MeltypeSession Session { get; } = new(CompositionTests.Detector, new CompositionTests.FakeConverter(),
+            new CompositionOptions { SpaceAroundEnglish = () => true }, () => new Settings());
+        private readonly GCHandle _handle;
+
+        public NativeSession() => _handle = GCHandle.Alloc(Session);
+
+        public JsonDocument Key(int scalar, int? vk = null, string? after = null)
+        {
+            delegate* unmanaged<IntPtr, int, int, int, byte*, byte*, byte*> handleKey = &Exports.HandleKey;
+            var afterPointer = after is null ? IntPtr.Zero : Marshal.StringToCoTaskMemUTF8(after);
+            byte* pointer;
+            try
+            {
+                pointer = handleKey(GCHandle.ToIntPtr(_handle), vk ??
+                    (scalar is >= 'a' and <= 'z' ? scalar - 0x20 : 0x07), scalar, 0, null, (byte*)afterPointer);
+            }
+            finally { Marshal.FreeCoTaskMem(afterPointer); }
+            Assert.True(pointer != null, "C ABI が有効な JSON を返す");
+            try { return JsonDocument.Parse(Marshal.PtrToStringUTF8((IntPtr)pointer)!); }
+            finally
+            {
+                delegate* unmanaged<byte*, void> free = &Exports.Free;
+                free(pointer);
+            }
+        }
+
+        public void Type(string text, string? after = null)
+        {
+            foreach (var c in text)
+            {
+                using var result = Key(c, after: after);
+            }
+        }
+
+        public void Dispose() => _handle.Free();
+    }
+
+    private static void AssertPassThrough(JsonDocument result, string? commit)
+    {
+        var root = result.RootElement;
+        Assert.True(!root.GetProperty("consumed").GetBoolean(), "元の OS イベントを 1 回だけ通す");
+        var commits = root.GetProperty("commits");
+        Assert.Equal(commit is null ? 0 : 1, commits.GetArrayLength(), "確定を重複させない");
+        if (commit is not null)
+        {
+            Assert.Equal(commit, commits[0].GetProperty("text").GetString());
+            Assert.Equal(0, commits[0].GetProperty("deleteBefore").GetInt32());
+        }
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("view").ValueKind, "未確定表示を閉じる");
+    }
+
+    [Test]
+    public static void Native_BmpCombiningAccentPreservesLatinRaw()
+    {
+        foreach (var (raw, mark) in new[] { ("e", 0x0301), ("cafe", 0x0301), ("a", 0x0308) })
+        {
+            using var native = new NativeSession();
+            native.Type(raw);
+            using var result = native.Key(mark);
+            AssertPassThrough(result, raw);
+            Assert.True(!native.Session.IsComposing, "アクセントの前に原文を確定する");
+            using var secondMark = native.Key(0x0300);
+            AssertPassThrough(secondMark, null);
+        }
+    }
+
+    [Test]
+    public static void Native_CombiningMarksKeepExplicitJapaneseAndVariationForms()
+    {
+        foreach (var mark in new[] { 0x3099, 0xFE0F, 0xE0100 })
+        {
+            using var native = new NativeSession();
+            native.Type("ka");
+            using var result = native.Key(mark);
+            AssertPassThrough(result, "か");
+        }
+        using var explicitKana = new NativeSession();
+        explicitKana.Type("e");
+        using var mode = explicitKana.Key(0, VirtualKeys.F6);
+        using var accent = explicitKana.Key(0x0301);
+        AssertPassThrough(accent, "え");
+    }
+
+    [Test]
+    public static void Native_CombiningMarksAttachBeforeAutomaticEnglishSpacing()
+    {
+        foreach (var mark in new[] { 0x3099, 0xFE0F, 0xE0100 })
+        {
+            using var native = new NativeSession();
+            native.Type("ka", after: "world");
+            using var result = native.Key(mark);
+            AssertPassThrough(result, "か");
+        }
+        using var explicitKana = new NativeSession();
+        explicitKana.Type("e", after: "world");
+        using var mode = explicitKana.Key(0, VirtualKeys.F6);
+        using var accent = explicitKana.Key(0x0301);
+        AssertPassThrough(accent, "え");
+    }
+
+    [Test]
+    public static void Native_NormalCommitStillAddsEnglishSpacing()
+    {
+        using var native = new NativeSession();
+        native.Type("ka", after: "world");
+        using var result = native.Key(0, VirtualKeys.Return);
+        Assert.True(result.RootElement.GetProperty("consumed").GetBoolean(), "通常の Enter は消費する");
+        Assert.Equal("か ", result.RootElement.GetProperty("commits")[0].GetProperty("text").GetString());
+    }
+
+    [Test]
+    public static void Native_SupplementaryScalarCommitsDisplayWithoutTruncating()
+    {
+        foreach (var scalar in new[] { 0x1F60A, 0x20BB7, 0x10000, 0x10FFFF })
+        {
+            using var native = new NativeSession();
+            native.Type("kyouha");
+            using var result = native.Key(scalar);
+            AssertPassThrough(result, "きょうは");
+            using var empty = native.Key(scalar);
+            AssertPassThrough(empty, null);
+        }
+    }
+
+    [Test]
+    public static void Native_InvalidScalarLeavesCompositionUnchanged()
+    {
+        using var native = new NativeSession();
+        using var initial = native.Key('e');
+        var view = initial.RootElement.GetProperty("view").GetRawText();
+        foreach (var scalar in new[] { -1, 0xD800, 0xDFFF, 0x110000, int.MaxValue })
+        {
+            using var result = native.Key(scalar);
+            Assert.True(!result.RootElement.GetProperty("consumed").GetBoolean(), "不正なスカラーを通す");
+            Assert.Equal(0, result.RootElement.GetProperty("commits").GetArrayLength());
+            Assert.Equal(view, result.RootElement.GetProperty("view").GetRawText());
+            Assert.True(native.Session.IsComposing, "未確定の内容を変えない");
+        }
+    }
+}

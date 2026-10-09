@@ -1,9 +1,15 @@
-# 行動規範
+<a name="行動規範"></a>
+<img src="docs/images/headings/code-of-conduct/title.svg" alt="行動規範" height="80">
+
 
 Meltype は、日本語と英語を混ぜて打つ人のための道具です。使う人・報告する人・直す人の誰もが、安心して参加できる場にしたいと考えています。
 この行動規範は、Meltype に関わるすべての場所 (GitHub の Issue・Pull Request・Discussions、テスターの Discord サーバー、不具合の報告フォーム、Meltype を代表して参加する場) に当てはまります。
 
-## 大切にすること
+<br>
+
+<a name="大切にすること"></a>
+<img src="docs/images/headings/code-of-conduct/01.svg" alt="大切にすること" height="53"><br>
+
 
 - 相手を尊重し、ていねいに話す。経験・年齢・国籍・性別・性自認・性的指向・障害・見た目・人種・宗教・使っている OS や日本語入力の違いで扱いを変えない
 - 違う意見や使い方があることを受け入れる (英語を混ぜる量も、打ち方の癖も人それぞれです)
@@ -12,7 +18,11 @@ Meltype は、日本語と英語を混ぜて打つ人のための道具です。
 - 初めて報告する人・初めて Pull Request を出す人を歓迎し、分からないことは手伝う
 - 不具合の報告では、ほかの人が打った文字やログの中の個人的な内容に配慮する
 
-## してはいけないこと
+<br>
+
+<a name="してはいけないこと"></a>
+<img src="docs/images/headings/code-of-conduct/02.svg" alt="してはいけないこと" height="53"><br>
+
 
 - 侮辱・嘲笑・人格攻撃、差別的な発言や画像
 - 性的な発言・画像、望まれていない誘い
@@ -22,7 +32,11 @@ Meltype は、日本語と英語を混ぜて打つ人のための道具です。
 - 変換のテスト (jht・ht など) やログを使って、ほかの人の打った文章をさらすこと
 - そのほか、Meltype に関わる場にふさわしくないと常識的に考えられる行為
 
-## 守られなかったとき
+<br>
+
+<a name="守られなかったとき"></a>
+<img src="docs/images/headings/code-of-conduct/03.svg" alt="守られなかったとき" height="53"><br>
+
 
 管理する人 (作者と、Discord サーバーの管理者) は、この行動規範に沿わない発言・コメント・コード・Issue などを、編集・非表示・削除することがあります。
 内容に応じて、次の対応をとります。
@@ -32,7 +46,11 @@ Meltype は、日本語と英語を混ぜて打つ人のための道具です。
 3. **一時的な参加停止**: 一定の期間、Issue・Pull Request・Discord などへの参加を止めます
 4. **参加の禁止**: 繰り返す場合や、悪質な場合は、Meltype のすべての場への参加を禁止します
 
-## 報告の窓口
+<br>
+
+<a name="報告の窓口"></a>
+<img src="docs/images/headings/code-of-conduct/04.svg" alt="報告の窓口" height="53"><br>
+
 
 行動規範に沿わない行為を見かけたり、受けたりしたときは、作者に知らせてください。
 
@@ -42,6 +60,10 @@ Meltype は、日本語と英語を混ぜて打つ人のための道具です。
 報告した人の名前や内容は、本人の同意なく公開しません。報告したことを理由に、報告した人が不利な扱いを受けることはありません。
 できるだけ早く確認し、対応の結果をお知らせします。
 
-## 由来
+<br>
+
+<a name="由来"></a>
+<img src="docs/images/headings/code-of-conduct/05.svg" alt="由来" height="53"><br>
+
 
 この行動規範は [Contributor Covenant](https://www.contributor-covenant.org/) 2.1 (CC BY 4.0) を参考に、Meltype に合わせて日本語で書いたものです。

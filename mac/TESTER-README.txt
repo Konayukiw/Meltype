@@ -17,9 +17,14 @@ Meltype はアプリではなく「入力ソース」(日本語入力) です。
         下のほうの「このまま開く」を押す)
        (それでも開けないときは、「ターミナル」を開いて次の 1 行を貼り付けて Enter:
           bash ~/Downloads/Meltype-mac/install.sh  )
-  3. いったんログアウトしてログインし直す
-  4. システム設定 → キーボード → 入力ソース →「編集…」→「+」→ 日本語 → Meltype を追加
-  5. メニューバーの入力メニューで Meltype を選ぶ
+  3. インストーラーが Meltype を登録・起動し、入力ソースを選びます。
+     通常の更新ではシステム設定を開く必要はありません。
+     install-app.sh、start-input-method.sh、select-input-source.swift も必要なので、zip 全体を展開してください。
+     起動エラーが出た場合は入力メニューから ABC または標準の日本語入力を選んでください。
+     初回に入力ソースが見つからない場合だけ、ログアウト・ログイン後に入力メニューを確認してください。
+  5. 「絵文字と記号を表示」「キーボードビューアを表示」「キーボード設定を開く…」の 3 つしか出ないときは、
+     入力メニューの表示が古いだけです。いったん「キーボードビューアを表示」を押すと Meltype が出てきます
+     (入力ソースとして登録されていても、この表示になることがあります)
 
 ■ 使い方
   ・ふつうにローマ字で打つと日本語、英単語 (google、github …) は英字のまま
@@ -33,10 +38,14 @@ Meltype はアプリではなく「入力ソース」(日本語入力) です。
        log stream --predicate 'process == "Meltype"' --level debug
 
 ■ 止まってしまったら
-  ターミナルで  pkill -x Meltype  (次にキーを打つと自動で起動し直します)
+  まず入力メニューで ABC または標準の日本語入力を選びます。
+  展開したフォルダーで次を実行して再起動できます:
+       bash ./start-input-method.sh "$HOME/Library/Input Methods/Meltype.app"
+       swift ./select-input-source.swift
 
 ■ アンインストール
   入力ソースから Meltype を外してから、ターミナルで
+       launchctl remove io.github.yksr-melt.Meltype.manual
        rm -rf ~/Library/Input\ Methods/Meltype.app
   設定と学習データも消すなら
        rm -rf ~/Library/Application\ Support/Meltype

@@ -22,9 +22,11 @@ public sealed class WordList
     }
 
     public bool ContainsWord(string text) => _words.Contains(text);
+    internal bool ContainsWord(ReadOnlySpan<char> text) => _words.GetAlternateLookup<ReadOnlySpan<char>>().Contains(text);
 
     /// <summary>text で始まる単語があるか (text 自体が単語の場合も true)。</summary>
     public bool HasPrefix(string text) => _prefixes.Contains(text);
+    internal bool HasPrefix(ReadOnlySpan<char> text) => _prefixes.GetAlternateLookup<ReadOnlySpan<char>>().Contains(text);
 
     public IReadOnlyList<string> WordsStartingWith(char first) =>
         _byFirstLetter.TryGetValue(first, out var bucket) ? bucket : [];

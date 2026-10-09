@@ -38,11 +38,29 @@ private let candidatesCallback: CandidatesCallback = { reading in
 }
 
 /// 英単語として正しい綴りか (macOS のスペルチェッカー、英語で調べる)。
+private let spellCacheLock = NSLock()
+nonisolated(unsafe) private var spellCache: [String: Bool] = [:]
+nonisolated(unsafe) private var spellCacheExpiration = Date.distantPast
+nonisolated(unsafe) private var spellChecks = 0
 private let isWordCallback: IsWordCallback = { word in
     guard let word else { return 0 }
     let text = String(cString: word)
+    let cached: Bool? = spellCacheLock.withLock {
+        if Date() >= spellCacheExpiration {
+            spellCache.removeAll(keepingCapacity: true)
+            spellCacheExpiration = Date().addingTimeInterval(300)
+        }
+        return spellCache[text]
+    }
+    if let cached { return cached ? 1 : 0 }
     let misspelled = NSSpellChecker.shared.checkSpelling(of: text, startingAt: 0, language: "en", wrap: false, inSpellDocumentWithTag: 0, wordCount: nil)
-    return misspelled.location == NSNotFound ? 1 : 0
+    let valid = misspelled.location == NSNotFound
+    spellCacheLock.withLock {
+        spellChecks += 1
+        if spellCache.count >= 4096 { spellCache.removeAll(keepingCapacity: true) }
+        spellCache[text] = valid
+    }
+    return valid ? 1 : 0
 }
 
 /// Swift 側で扱う結果 (本体の SessionResult.ToJson と同じ形)。
@@ -67,11 +85,13 @@ struct CompositionView: Decodable {
     let clauses: [String]
     /// 選んでいる候補の意味 (無ければ nil)。候補で少し止まったら注釈に出す。
     let meaning: String?
+    let suggestion: String?
 }
 
 /// libMeltypeNative.dylib を読み込んで呼ぶ。Meltype.app/Contents/Frameworks に置く (build.sh)。
 final class NativeCore {
     static let shared = NativeCore()
+    var spellCheckCount: Int { spellCacheLock.withLock { spellChecks } }
 
     private let library: UnsafeMutableRawPointer?
     private let initFunction: InitFunction?
@@ -81,6 +101,7 @@ final class NativeCore {
     private let commitFunction: CommitFunction?
     private let selectFunction: SelectFunction?
     private let setDirectFunction: SetDirectFunction?
+    private let setCodeInputFunction: SetDirectFunction?
     private let dataDirectoryFunction: DataDirectoryFunction?
     private let reportUrlFunction: ReportUrlFunction?
     private let freeFunction: FreeFunction?
@@ -104,6 +125,7 @@ final class NativeCore {
         commitFunction = symbol("meltype_commit", as: CommitFunction.self)
         selectFunction = symbol("meltype_select_candidate", as: SelectFunction.self)
         setDirectFunction = symbol("meltype_set_direct", as: SetDirectFunction.self)
+        setCodeInputFunction = symbol("meltype_set_code_input", as: SetDirectFunction.self)
         dataDirectoryFunction = symbol("meltype_data_directory", as: DataDirectoryFunction.self)
         reportUrlFunction = symbol("meltype_report_url", as: ReportUrlFunction.self)
         freeFunction = symbol("meltype_free", as: FreeFunction.self)
@@ -131,6 +153,20 @@ final class NativeCore {
         return decode(commitFunction(session))
     }
 
+    /// 元の複数スカラーのイベントをアプリに渡す前に、未確定の内容だけ確定する。
+    /// 結合文字から始まるイベントは、1 スカラーの場合と同じく直前の文字との境界を保つ。
+    func commitBeforeExternalText(_ session: UnsafeMutableRawPointer?, text: String) -> SessionResult? {
+        if let first = text.unicodeScalars.first {
+            switch first.properties.generalCategory {
+            case .nonspacingMark, .spacingMark, .enclosingMark:
+                return handleKey(session, vk: 0x07, character: Int32(first.value), modifiers: 0, before: nil, after: nil)
+            default:
+                break
+            }
+        }
+        return commit(session)
+    }
+
     func selectCandidate(_ session: UnsafeMutableRawPointer?, index: Int) -> SessionResult? {
         guard let selectFunction else { return nil }
         return decode(selectFunction(session, Int32(index)))
@@ -138,6 +174,10 @@ final class NativeCore {
 
     func setDirect(_ session: UnsafeMutableRawPointer?, _ direct: Bool) {
         setDirectFunction?(session, direct ? 1 : 0)
+    }
+
+    func setCodeInput(_ session: UnsafeMutableRawPointer?, _ enabled: Bool) {
+        setCodeInputFunction?(session, enabled ? 1 : 0)
     }
 
     /// 設定・学習データ・ユーザー辞書の保存場所。

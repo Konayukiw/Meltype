@@ -12,6 +12,10 @@ foreach ($folderName in 'Startup', 'Programs') {
     if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut -Force }
 }
 Get-Process Meltype, meltype_mozc_helper -ErrorAction SilentlyContinue | Stop-Process -Force
+. (Join-Path $PSScriptRoot 'packaging\meltype-ime.ps1')
+if (-not (Uninstall-MeltypeIme)) {
+    Write-Warning 'Meltype IME の登録を外せませんでした (管理者権限の確認で「いいえ」を選んだときなど)。もう一度このスクリプトを実行してください。続けて外せないときは、管理者の PowerShell で native\tip\Register-Tip.ps1 -Unregister を実行してください。'
+}
 
 if ($RemoveData) {
     $data = Join-Path $env:LOCALAPPDATA 'Meltype'

@@ -14,8 +14,8 @@
     <AssemblyName>MeltypeNative</AssemblyName>
     <RootNamespace>Meltype.Mac</RootNamespace>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <!-- 設定・学習データの JSON は型を見て読み書きする (System.Text.Json の reflection)。NativeAOT では既定で無効なので有効にし、
-         Meltype.Core の型を削らずに残す (削ると、設定を読めない・学習を保存できない)。 -->
+    <!-- 設定・学習データの JSON は、ビルド時に作った型の情報 (Meltype.Core の SettingsJsonContext など、ソース生成) で読み書きする。
+         reflection は NativeAOT では列挙型のプロパティ・private な型を読めない (issue #151)。念のため有効のままにし、Meltype.Core の型も削らずに残す。 -->
     <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
   <ItemGroup>

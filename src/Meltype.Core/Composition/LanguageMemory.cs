@@ -16,7 +16,7 @@ public sealed class LanguageMemory
     private readonly string? _path;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
-    private sealed class Entry
+    internal sealed class Entry
     {
         public bool English { get; set; }
         public DateTime Used { get; set; }
@@ -54,7 +54,7 @@ public sealed class LanguageMemory
         if (path is null || !File.Exists(path)) return;
         try
         {
-            var loaded = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(path));
+            var loaded = JsonSerializer.Deserialize(File.ReadAllText(path), Config.LearningJsonContext.Default.Languages);
             if (loaded is not null) foreach (var (word, entry) in loaded) _entries[word] = entry;
         }
         catch (Exception ex)
@@ -73,6 +73,13 @@ public sealed class LanguageMemory
     {
         if (!_entries.TryGetValue(word, out var entry)) return null;
         if (NeedsTwice(word, entry)) return null;
+        return entry.English;
+    }
+
+    internal bool? Get(ReadOnlySpan<char> word)
+    {
+        if (!_entries.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(word, out var entry)) return null;
+        if (NeedsTwice(word.ToString(), entry)) return null;
         return entry.English;
     }
 
@@ -141,7 +148,7 @@ public sealed class LanguageMemory
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var temp = _path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(_entries));
+            File.WriteAllText(temp, JsonSerializer.Serialize(_entries, Config.LearningJsonContext.Default.Languages));
             File.Move(temp, _path, overwrite: true);
         }
         catch (Exception ex)

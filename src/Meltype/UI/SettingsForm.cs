@@ -289,6 +289,28 @@ internal sealed class SettingsForm : Form
                 s => combo.SelectedIndex = values.IndexOf(property.GetValue(s)!),
                 s => property.SetValue(s, values[Math.Max(0, combo.SelectedIndex)]));
         }
+        if (type == typeof(string) && property.Name == nameof(Settings.CompositionFont))
+        {
+            // この PC のフォントから選ぶ。先頭は既定 (空)
+            using var installed = new System.Drawing.Text.InstalledFontCollection();
+            var families = installed.Families.Select(f => f.Name).Where(n => n.Length > 0 && !n.StartsWith('@')).Distinct().OrderBy(n => n, StringComparer.CurrentCulture).ToList();
+            var combo = DropDown([DefaultFontChoice, .. families]);
+            return new Binding(property, combo,
+                s =>
+                {
+                    var name = (string?)property.GetValue(s) ?? "";
+                    if (name.Length > 0 && !combo.Items.Contains(name)) combo.Items.Add(name); // 今は無いフォントでも選んだままにする
+                    combo.SelectedItem = name.Length == 0 ? DefaultFontChoice : name;
+                },
+                s => property.SetValue(s, combo.SelectedItem is string name && name != DefaultFontChoice ? name : ""));
+        }
+        if (type == typeof(string) && property.Name is nameof(Settings.TextInputApps) or nameof(Settings.PasteApps) or nameof(Settings.NoPasteApps))
+        {
+            var panel = AppListEditor(out var text);
+            return new Binding(property, panel,
+                s => text.Text = (string?)property.GetValue(s) ?? "",
+                s => property.SetValue(s, text.Text.Trim()));
+        }
         if (type == typeof(int))
         {
             var number = new NumericUpDown { Minimum = 0, Maximum = 60000, Width = 120, Anchor = AnchorStyles.Left };
@@ -306,7 +328,7 @@ internal sealed class SettingsForm : Form
             var remove = new Button { Text = "選んだ行を削除", AutoSize = true };
             remove.Click += (_, _) =>
             {
-                foreach (var row in grid.SelectedCells.Cast<DataGridViewCell>().Select(c => c.OwningRow).Distinct().Where(r => !r.IsNewRow).ToList()) grid.Rows.Remove(row);
+                foreach (var row in grid.SelectedCells.Cast<DataGridViewCell>().Select(c => c.OwningRow).OfType<DataGridViewRow>().Distinct().Where(r => !r.IsNewRow).ToList()) grid.Rows.Remove(row);
             };
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, WrapContents = false, Margin = Padding.Empty };
             actions.Controls.AddRange([add, remove]);
@@ -368,7 +390,7 @@ internal sealed class SettingsForm : Form
         .Where(r => !r.IsNewRow && (r.Cells[0].Value as string ?? "").Trim().Length > 0)
         .Select(r => new AppKind
         {
-            Name = ((string)r.Cells[0].Value).Trim(),
+            Name = (r.Cells[0].Value as string ?? "").Trim(),
             Base = Equals(r.Cells[1].Value, EnumName(typeof(AppProfile), AppProfile.Code)) ? AppProfile.Code : AppProfile.General,
             DetectionLevel = Enum.GetValues<DetectionLevel>().Where(l => Equals(r.Cells[2].Value, EnumName(typeof(DetectionLevel), l))).Cast<DetectionLevel?>().FirstOrDefault(),
             LiveConversion = Equals(r.Cells[3].Value, On) ? true : Equals(r.Cells[3].Value, Off) ? false : null,
@@ -430,6 +452,8 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    private const string DefaultFontChoice = "既定 (Yu Gothic UI)";
+
     private ComboBox DropDown(string[] items)
     {
         var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250, Anchor = AnchorStyles.Left };
@@ -439,7 +463,18 @@ internal sealed class SettingsForm : Form
     }
 
     /// <summary>窓を開いている実行中のアプリの一覧を出し、選んだものをアプリ別設定の表に足す (既に表にあれば、その行を選ぶ)。</summary>
-    private static void ShowRunningApps(DataGridView grid, Control anchor)
+    private static void ShowRunningApps(DataGridView grid, Control anchor) => ShowRunningApps(anchor, name =>
+    {
+        var existing = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => !r.IsNewRow && string.Equals(r.Cells[0].Value as string, name, StringComparison.OrdinalIgnoreCase));
+        var row = existing ?? grid.Rows[grid.Rows.Add(name, On, EnumName(typeof(AppProfile), AppProfile.General))];
+        grid.ClearSelection();
+        row.Selected = true;
+        grid.FirstDisplayedScrollingRowIndex = row.Index;
+        grid.CurrentCell = row.Cells[2];
+    });
+
+    /// <summary>窓を開いている実行中のアプリ (プロセス名) を一覧で出し、選んだものを渡す。</summary>
+    private static void ShowRunningApps(Control anchor, Action<string> picked)
     {
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var process in System.Diagnostics.Process.GetProcesses())
@@ -458,20 +493,30 @@ internal sealed class SettingsForm : Form
             }
         }
         var menu = new ContextMenuStrip();
-        foreach (var name in names)
-        {
-            menu.Items.Add(name, null, (_, _) =>
-            {
-                var existing = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => !r.IsNewRow && string.Equals(r.Cells[0].Value as string, name, StringComparison.OrdinalIgnoreCase));
-                var row = existing ?? grid.Rows[grid.Rows.Add(name, On, EnumName(typeof(AppProfile), AppProfile.General))];
-                grid.ClearSelection();
-                row.Selected = true;
-                grid.FirstDisplayedScrollingRowIndex = row.Index;
-                grid.CurrentCell = row.Cells[2];
-            });
-        }
+        foreach (var name in names) menu.Items.Add(name, null, (_, _) => picked(name));
         if (menu.Items.Count == 0) menu.Items.Add("(窓を開いているアプリがありません)").Enabled = false;
         menu.Show(anchor, new Point(0, anchor.Height));
+    }
+
+    /// <summary>
+    /// アプリの一覧 (プロセス名、カンマ区切り) の設定 (入力欄とみなすアプリ・貼り付けで入力するアプリなど) の部品。
+    /// 手で書くほか、実行中のアプリから選んで足せる (issue #223)。
+    /// </summary>
+    private static Panel AppListEditor(out TextBox text)
+    {
+        var box = text = new TextBox { Dock = DockStyle.Fill, PlaceholderText = "例: Adobe Premiere Pro.exe, foo.exe" };
+        var add = new Button { Text = "実行中のアプリから選ぶ…", AutoSize = true, Dock = DockStyle.Right };
+        add.Click += (_, _) => ShowRunningApps(add, name =>
+        {
+            var apps = box.Text.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            if (apps.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
+            apps.Add(name);
+            box.Text = string.Join(", ", apps);
+        });
+        var panel = new Panel { Height = Math.Max(box.PreferredHeight, add.PreferredSize.Height) + 4, Dock = DockStyle.Fill };
+        panel.Controls.Add(box);
+        panel.Controls.Add(add);
+        return panel;
     }
 
     private static DataGridView AppRulesGrid()

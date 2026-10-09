@@ -4,7 +4,7 @@
     <name>org.freedesktop.IBus.Meltype</name>
     <description>Meltype: 半角/全角 を押さずに日本語と英語を打ち分ける日本語入力</description>
     <exec>@DIR@/ibus-engine-meltype --ibus</exec>
-    <version>1.0.2</version>
+    <version>1.1.1</version>
     <author>Yukishiro</author>
     <license>GPL-3.0-or-later</license>
     <homepage>https://github.com/yksr-melt/Meltype</homepage>

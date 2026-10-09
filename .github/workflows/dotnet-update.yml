@@ -1,0 +1,81 @@
+name: dotnet-update
+
+# 同梱している .NET のランタイムに新しいパッチ (セキュリティ修正など) が出たら、Issue を立ててリリースを促す (#109)。
+# 配布物の .NET は、ビルドのたびに setup-dotnet (10.0.x) が入れる最新の版になる (Windows はそのランタイムを同梱、
+# Mac・Linux は NativeAOT で組み込む)。版を固定している所は無いので、新しいパッチを届けるにはリリースし直すだけでよい。
+# ここでは、最新リリースの Windows の zip に入っている版 (app\dotnet\host\fxr\<版>) と、Microsoft が公開している
+# 最新の版 (release-metadata の latest-runtime) を比べ、新しい版が出ていれば Issue を 1 つ立てる (同じ版の Issue は 2 回立てない)。
+on:
+  schedule:
+    # .NET のパッチはふつう毎月第 2 火曜日 (米国時間) に出るので、毎週水曜日に見る
+    - cron: '17 3 * * 3'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: dotnet-update
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Compare bundled .NET with the latest patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version_re='^[0-9]+\.[0-9]+\.[0-9]+$'
+
+          # 最新リリースの Windows の zip に入っているランタイムの版
+          tag=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+          url=$(gh api "repos/$REPO/releases/latest" --jq '[.assets[] | select(.name | endswith("-windows.zip"))][0].browser_download_url // ""')
+          if [[ -z "$url" ]]; then echo "最新リリース $tag に Windows の zip がありません"; exit 0; fi
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/meltype.zip" "$url"
+          bundled=$(unzip -Z1 "$RUNNER_TEMP/meltype.zip" | grep -oE 'dotnet[\\/]host[\\/]fxr[\\/][0-9]+\.[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          if [[ ! "$bundled" =~ $version_re ]]; then echo "::warning::$tag の zip から .NET の版を読めませんでした"; exit 0; fi
+          channel="${bundled%.*}"
+
+          # 同じ系列 (10.0 など) の最新のランタイム
+          metadata=$(curl -fsSL --retry 3 "https://builds.dotnet.microsoft.com/dotnet/release-metadata/$channel/releases.json")
+          latest=$(jq -r '."latest-runtime"' <<<"$metadata")
+          if [[ ! "$latest" =~ $version_re ]]; then echo "::warning::.NET $channel の最新の版を読めませんでした"; exit 0; fi
+          echo "$tag の .NET: $bundled / 最新: $latest"
+          if [[ "$(printf '%s\n%s\n' "$bundled" "$latest" | sort -V | tail -1)" == "$bundled" ]]; then
+            echo "最新の .NET を同梱しています"
+            exit 0
+          fi
+
+          title="同梱の .NET を $latest に更新する (リリースし直す)"
+          # このワークフローが立てた Issue (閉じたものも) に同じ題名があれば立てない
+          if gh api --paginate "repos/$REPO/issues?state=all&creator=github-actions%5Bbot%5D&per_page=100" --jq '.[].title' | grep -Fxq "$title"; then
+            echo "Issue は立て済みです"
+            exit 0
+          fi
+
+          # bundled より新しく latest までの版のうち、セキュリティ修正を含むもの
+          security=$(jq -r '[.releases[] | select(.security == true) | .["release-version"]] | .[]' <<<"$metadata" |
+            while read -r v; do
+              if [[ "$v" =~ $version_re && "$v" != "$bundled" && "$(printf '%s\n%s\n' "$bundled" "$v" | sort -V | tail -1)" == "$v" ]]; then echo "$v"; fi
+            done | sort -V | paste -sd ' ' -)
+          notes=$(jq -r --arg v "$latest" '.releases[] | select(.["release-version"] == $v) | .["release-notes"] // ""' <<<"$metadata" | head -1)
+
+          {
+            echo "最新リリース **$tag** に同梱している .NET ランタイムは **$bundled** ですが、**$latest** が出ています。"
+            echo
+            if [[ -n "$security" ]]; then echo "- セキュリティ修正を含む版: $security"; else echo "- セキュリティ修正を含む版: なし"; fi
+            if [[ -n "$notes" ]]; then echo "- リリースノート: $notes"; fi
+            echo
+            echo "## やること"
+            echo
+            echo "コードの変更は要りません。CI (setup-dotnet の \`10.0.x\`) がビルドのたびに最新の .NET を入れるので、"
+            echo "[docs/RELEASE.md]($GITHUB_SERVER_URL/$REPO/blob/main/docs/RELEASE.md) の手順で版を上げてタグを付ければ、Windows (同梱のランタイム)・Mac / Linux (NativeAOT) とも新しい .NET になります。"
+            echo
+            echo "この Issue は dotnet-update ワークフローが立てました (毎週水曜日に確認)。"
+          } > "$RUNNER_TEMP/body.md"
+          gh api "repos/$REPO/issues" -f title="$title" -F body=@"$RUNNER_TEMP/body.md" --jq .html_url

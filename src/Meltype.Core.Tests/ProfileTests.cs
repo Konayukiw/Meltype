@@ -112,4 +112,32 @@ internal static class ProfileTests
         settings.PasteApps = "Resolve.exe, LINE.exe ;foo.exe";
         Assert.True(settings.UsesPaste("LINE.exe") && settings.UsesPaste("foo.exe"), "カンマ・セミコロン区切り");
     }
+    [Test]
+    public static void TextInputApps_MatchProcessNames()
+    {
+        // #52: Premiere Pro は入力欄と判定されないので、設定に書いたアプリではフォーカスのある所を入力欄として扱う
+        var settings = new Settings().Normalize();
+        Assert.True(!settings.TreatsAsTextInput("Adobe Premiere Pro.exe") && !settings.TreatsAsTextInput(null), "既定は空 (何もしない)");
+        settings.TextInputApps = " Adobe Premiere Pro.exe , foo.exe;bar.exe ";
+        Assert.True(settings.TreatsAsTextInput("Adobe Premiere Pro.exe") && settings.TreatsAsTextInput("adobe premiere pro.EXE"), "空白を含む名前 (大文字小文字は問わない)");
+        Assert.True(settings.TreatsAsTextInput("foo.exe") && settings.TreatsAsTextInput("bar.exe"), "カンマ・セミコロン区切り");
+        Assert.True(!settings.TreatsAsTextInput("Adobe") && !settings.TreatsAsTextInput("Pro.exe") && !settings.TreatsAsTextInput("Premiere"), "名前の一部では一致しない");
+        Assert.True(!settings.TreatsAsTextInput("AfterFX.exe"), "書いていないアプリはそのまま");
+        settings.TextInputApps = "a.exe b.exe";
+        Assert.True(settings.TreatsAsTextInput("a.exe") && settings.TreatsAsTextInput("b.exe"), "空白区切りの .exe の並びも通す");
+
+        var path = Path.Combine(Path.GetTempPath(), $"meltype-textinput-{Guid.NewGuid():N}.json");
+        try
+        {
+            new Settings { TextInputApps = "Adobe Premiere Pro.exe" }.Save(path);
+            var loaded = Settings.Load(path);
+            Assert.Equal("Adobe Premiere Pro.exe", loaded.TextInputApps, "保存して読み込んでも保つ");
+            Assert.True(loaded.Clone().TreatsAsTextInput("Adobe Premiere Pro.exe"), "複製しても保つ");
+            Assert.Equal("", Settings.Load(Path.Combine(Path.GetTempPath(), $"meltype-none-{Guid.NewGuid():N}.json")).TextInputApps, "設定ファイルが無ければ空");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

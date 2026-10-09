@@ -38,6 +38,10 @@ internal static class Program
             case "--eval-json":
                 Checks.EvalJson(args[1]);
                 return 0;
+            case "--mixed-bench":
+                // --mixed-bench 出力ファイル: 日本語の文の中に英単語を入れて打ち、英単語と日本語に正しく分かれるかを数える (区切りの点数化の試作の比較用)
+                Checks.MixedBench(args[1]);
+                return 0;
             case "--expect":
                 // --expect 入力ファイル 出力ファイル (Pull Request のチェック用)
                 Checks.Expect(args[1], args[2]);

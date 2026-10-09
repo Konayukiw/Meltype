@@ -83,7 +83,7 @@ public sealed class ConversionHistory
     private readonly string? _path;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
-    private sealed class Entry
+    internal sealed class Entry
     {
         public string Text { get; set; } = "";
         public DateTime Used { get; set; }
@@ -95,7 +95,7 @@ public sealed class ConversionHistory
         if (path is null || !File.Exists(path)) return;
         try
         {
-            var loaded = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(path));
+            var loaded = JsonSerializer.Deserialize(File.ReadAllText(path), Config.ConversionJsonContext.Default.Conversions);
             // 1 文字の読み (き → 記) は、以前の版で覚えてしまったものも使わない (関係ない変換を巻き込むため)。
             if (loaded is not null) foreach (var (reading, entry) in loaded) if (reading.Length >= 2) _entries[reading] = entry;
         }
@@ -152,7 +152,7 @@ public sealed class ConversionHistory
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var temp = _path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(_entries));
+            File.WriteAllText(temp, JsonSerializer.Serialize(_entries, Config.ConversionJsonContext.Default.Conversions));
             File.Move(temp, _path, overwrite: true);
         }
         catch (Exception ex)

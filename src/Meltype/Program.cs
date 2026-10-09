@@ -43,6 +43,16 @@ internal static class Program
             try { settings.Save(AppPaths.ConfigFile); } catch { }
         }
 
+        // 動作モードが Meltype IME なのに、Meltype IME が登録されていない (登録を外した・ほかのユーザーがアンインストールした):
+        // どこでも何も起きなくなるので、Meltype キーボードに戻して保存する (Meltype IME を入れ直したら、トレイで選び直す)。
+        // 保存しておくと、あとで前の版 (動作モード「Meltype IME」を読めない) を入れても、設定が初期化されない
+        if (settings.Mode == InputMode.Tsf && Tip.TipServer.IsKnownUnregistered)
+        {
+            settings.Mode = InputMode.Keyboard;
+            try { settings.Save(AppPaths.ConfigFile); } catch { }
+            Diagnostics.Log.Warn("Meltype IME が登録されていないので、動作モードを Meltype キーボードに戻しました。");
+        }
+
         // ダウンロード済みの新しい版があれば、起動せずに更新する (install.ps1 が新しい版を起動する)。
         if (Updater.ApplyStagedAtStartup(() => settings.AutoUpdate)) return 0;
 

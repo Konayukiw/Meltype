@@ -36,7 +36,7 @@ internal static class ReportInfo
             $"自動判定の強さ: {settings.DetectionLevel}",
             $"入力方式: {settings.InputStyle}",
             $"ライブ変換: {(settings.LiveConversion ? "ON" : "OFF")}",
-            $"変換ボックス: {settings.CompositionPlacement} / {settings.CompositionSize}",
+            $"変換ボックス: {settings.CompositionPlacement} / {settings.CompositionSize} / {settings.CompositionTheme} / {settings.CompositionOpacity}",
             $"キーボード: {KeyboardKind()}",
             $"画面: {Screen.AllScreens.Length} 枚、拡大率 {Scaling()}%",
             $"言語: {CultureInfo.CurrentUICulture.Name}",

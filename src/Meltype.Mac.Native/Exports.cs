@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yukishiro
 
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -73,7 +74,7 @@ public static unsafe class Exports
         {
             var session = s_mozc is { } mozc
                 ? MeltypeSession.CreateDefault(mozc, mozc.Candidates, s_isWord == null ? null : new CallbackWordChecker())
-                : MeltypeSession.CreateDefault(new CallbackConverter(), MoreCandidates, s_isWord == null ? null : new CallbackWordChecker());
+                : MeltypeSession.CreateDefault(new CallbackConverter(), MoreCandidates, s_isWord == null ? null : new CallbackWordChecker(), autoSpacing: true);
             return GCHandle.ToIntPtr(GCHandle.Alloc(session));
         }
         catch (Exception ex)
@@ -91,15 +92,34 @@ public static unsafe class Exports
 
     /// <summary>
     /// キーを 1 つ処理して、結果を JSON で返す (<see cref="SessionResult.ToJson"/>)。
-    /// vk は Windows の仮想キーコード、ch は入力する文字 (UTF-16 の 1 文字、無ければ 0)、
+    /// vk は Windows の仮想キーコード、ch は入力する Unicode スカラー (無ければ 0)、
     /// modifiers は Shift = 1, Control = 2, Option = 4, Command = 8。before / after はキャレットの前後の文字列 (NULL 可)。
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_handle_key")]
     public static byte* HandleKey(IntPtr handle, int vk, int ch, int modifiers, byte* before, byte* after)
     {
-        return Run(handle, session => session.HandleKey(vk, ch > 0 ? (char)ch : null,
-            (modifiers & 1) != 0, (modifiers & 2) != 0, (modifiers & 4) != 0, (modifiers & 8) != 0, FromUtf8(before), FromUtf8(after)));
+        return Run(handle, session =>
+        {
+            // 文字を伴わない・扱えない入力。不正な Unicode (負数・単独サロゲート・上限超過) は
+            // 文字列を作らず、状態も変えずにアプリへそのまま渡す。
+            if (IsInvalidScalar(ch)) return session.PassThrough();
+            // 結合文字は、未確定表示に取り込まず直前の内容を確定して元のイベントを通す。
+            // U+0300..036F の Latin アクセントのみ ASCII 英字の原文を優先する。
+            // 濁点・異体字セレクターでは、日本語の表示や明示的な候補をそのまま確定する。
+            if (Rune.GetUnicodeCategory(new Rune(ch)) is UnicodeCategory.NonSpacingMark or
+                UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark)
+                return session.CommitCombiningForPassThrough(preserveLatinRaw: ch is >= 0x0300 and <= 0x036F);
+            // 補助面の有効なスカラー (U+10000..U+10FFFF) は char (UTF-16 1 コードユニット) へ切り詰められない。
+            // 未確定の内容をここで確定してから、元の OS イベントを 1 回だけアプリへ通す (Consumed = false)。
+            if (ch > 0xFFFF) return session.CommitForPassThrough();
+            return session.HandleKey(vk, ch > 0 ? (char)ch : null,
+                (modifiers & 1) != 0, (modifiers & 2) != 0, (modifiers & 4) != 0, (modifiers & 8) != 0, FromUtf8(before), FromUtf8(after));
+        });
     }
+
+    /// <summary>不正な文字の引数か。0 は「文字を伴わないキー」なので不正ではない。</summary>
+    private static bool IsInvalidScalar(int ch) =>
+        ch < 0 || ch > 0x10FFFF || (ch >= 0xD800 && ch <= 0xDFFF);
 
     /// <summary>未確定の内容を確定する (フォーカスが外れたときなど)。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_commit")]
@@ -114,6 +134,19 @@ public static unsafe class Exports
     public static void SetDirect(IntPtr handle, int direct)
     {
         if (handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session) session.Direct = direct != 0;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "meltype_set_code_input")]
+    public static void SetCodeInput(IntPtr handle, int enabled)
+    {
+        if (handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session) session.CodeInput = enabled != 0;
+    }
+
+    /// <summary>入力欄が確定済みの文字の削除に対応しているか (1) いないか (0)。対応していなければ、確定し直しをしない。</summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_set_can_delete")]
+    public static void SetCanDelete(IntPtr handle, int canDelete)
+    {
+        if (handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session) session.CanDeleteSurrounding = canDelete != 0;
     }
 
     /// <summary>データの保存場所 (設定・学習・ユーザー辞書)。meltype_free で解放する。</summary>

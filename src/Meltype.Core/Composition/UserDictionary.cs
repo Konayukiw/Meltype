@@ -13,6 +13,8 @@ public sealed record UserWord(string Reading, string Word);
 /// 変換で最優先に使う: 変換する読みの中に登録した読みが含まれていれば、その部分は変換エンジンの区切りに関係なく
 /// 登録した単語にする (きごうとう → 記号等 を登録すると、きごうとうふくめ → 記号等|含め)。
 /// トレイの「ユーザー辞書...」から登録・削除する。
+/// importDirectory (Mac / Linux は データフォルダ/dictionaries) に置いた .plist (macOS の「ユーザ辞書」を書き出したもの) の語も使う (#40)。
+/// .plist の語は userdict.txt には書かず、置いたファイルをそのまま読む (ファイルを置き換えれば次の起動で入れ替わる)。
 /// </summary>
 public sealed class UserDictionary
 {
@@ -21,12 +23,14 @@ public sealed class UserDictionary
 
     private readonly string? _path;
     private readonly List<UserWord> _words = [];
+    // dictionaries/*.plist から読んだ語。userdict.txt の登録の後、同梱の語句の前。保存も表示もしない。
+    private readonly List<UserWord> _imported = [];
     // 同梱の語句 (dictionaries/phrases.txt)。変換エンジンが苦手な語句を補う。ユーザーの登録より後回しで、保存も表示もしない。
     private readonly List<UserWord> _builtIn = [];
     private Dictionary<string, List<string>> _byReading = new(StringComparer.Ordinal);
     private int _maxReadingLength;
 
-    public UserDictionary(string? path, bool builtIn = true)
+    public UserDictionary(string? path, bool builtIn = true, string? importDirectory = null)
     {
         _path = path;
         if (builtIn) Parse(Detection.DictionarySource.ReadEmbedded("phrases.txt").Split('\n'), _builtIn);
@@ -38,8 +42,42 @@ public sealed class UserDictionary
         {
             Diagnostics.Log.Warn($"ユーザー辞書を読めませんでした: {ex.Message}");
         }
+        if (importDirectory is not null) LoadPlists(importDirectory);
         Rebuild();
     }
+
+    /// <summary>フォルダの .plist を読む。読めないファイル (バイナリの plist など) は飛ばす。</summary>
+    private void LoadPlists(string directory)
+    {
+        string[] files;
+        try
+        {
+            if (!Directory.Exists(directory)) return;
+            files = Directory.GetFiles(directory, "*.plist");
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Warn($"ユーザー辞書のフォルダを読めませんでした: {ex.Message}");
+            return;
+        }
+        Array.Sort(files, StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            try
+            {
+                var result = UserDictionaryFile.ParsePlist(File.ReadAllBytes(file));
+                _imported.AddRange(result.Words);
+                Diagnostics.Log.Info($"ユーザー辞書 {Path.GetFileName(file)}: {result.Words.Count} 語 (飛ばした項目: {result.Skipped})");
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.Log.Warn($"ユーザー辞書 {Path.GetFileName(file)} を読めませんでした: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>.plist から読んだ語の数 (userdict.txt の語とは別)。</summary>
+    public int ImportedCount => _imported.Count;
 
     private static void Parse(IEnumerable<string> lines, List<UserWord> words)
     {
@@ -150,8 +188,8 @@ public sealed class UserDictionary
     private void Rebuild()
     {
         var byReading = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        // 後から登録したものを先にする。同梱の語句はユーザーの登録の後。
-        foreach (var word in Enumerable.Reverse(_words).Concat(_builtIn))
+        // 後から登録したものを先にする。.plist の語はユーザーの登録の後、同梱の語句はさらに後。
+        foreach (var word in Enumerable.Reverse(_words).Concat(_imported).Concat(_builtIn))
         {
             if (!byReading.TryGetValue(word.Reading, out var list)) byReading[word.Reading] = list = [];
             if (!list.Contains(word.Word)) list.Add(word.Word);

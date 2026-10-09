@@ -150,7 +150,7 @@ internal sealed class UserDictionaryForm : Form
         using var dialog = new OpenFileDialog
         {
             Title = "ユーザー辞書を取り込む",
-            Filter = "辞書のテキストファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
+            Filter = "辞書のテキストファイル (*.txt)|*.txt|macOS のユーザ辞書 (*.plist)|*.plist|すべてのファイル (*.*)|*.*",
         };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
         try

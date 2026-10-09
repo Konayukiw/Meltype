@@ -5,11 +5,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <RootNamespace>Meltype.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Meltype.Core\Meltype.Core.csproj" />
+    <ProjectReference Include="..\Meltype.Mac.Native\Meltype.Mac.Native.csproj" />
     <InternalsVisibleTo Include="Meltype.Tests" />
   </ItemGroup>
 </Project>

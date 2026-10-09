@@ -27,6 +27,15 @@ let package = Package(
                 .linkedFramework("Carbon"),
             ]
         ),
+        // 入力ソースの登録をやり直す小さな道具 (#134)。Meltype.app に入れて、install.sh / build.sh が
+        // 入れ替えたあとに呼ぶ。azooKey には依存しない。
+        .executableTarget(
+            name: "RegisterInputSource",
+            path: "Sources/RegisterInputSource",
+            linkerSettings: [
+                .linkedFramework("Carbon"),
+            ]
+        ),
     ],
     swiftLanguageVersions: [.v5]
 )

@@ -125,6 +125,65 @@ public sealed class RomajiDetector
         return set;
     }
 
+    // ユーザーのローマ字の表 (romaji.txt。AZIK などの拡張ローマ字: kz = かん、kq = かい)。組み込みの綴りより優先する。
+    private readonly Dictionary<string, string>? _custom;
+    private readonly HashSet<string> _customPartials = new(StringComparer.Ordinal);
+    private readonly int _customMaxLength;
+
+    public RomajiDetector() : this(null)
+    {
+    }
+
+    /// <param name="custom">ユーザーの綴り → かな (英小文字だけの綴り)。null なら組み込みの表だけ。</param>
+    public RomajiDetector(IReadOnlyDictionary<string, string>? custom)
+    {
+        if (custom is not { Count: > 0 }) return;
+        _custom = new Dictionary<string, string>(custom, StringComparer.Ordinal);
+        foreach (var spelling in _custom.Keys)
+        {
+            _customMaxLength = Math.Max(_customMaxLength, spelling.Length);
+            for (var i = 1; i < spelling.Length; i++) _customPartials.Add(spelling[..i]);
+        }
+    }
+
+    /// <summary>ユーザー辞書のフォルダーの romaji.txt を読んで作る (無ければ組み込みの表だけ)。</summary>
+    public static RomajiDetector CreateDefault(string? userDictionaryDirectory) => new(LoadCustomTable(userDictionaryDirectory));
+
+    /// <summary>
+    /// ユーザーのローマ字の表 (romaji.txt)。1 行に「綴り<Tab>かな」(空白区切りも可)、行頭の # はコメント。
+    /// 綴りは英小文字だけ (大文字は小文字にする)。英字以外 (; など) を含む行は読まない。
+    /// </summary>
+    public static Dictionary<string, string>? LoadCustomTable(string? userDictionaryDirectory)
+    {
+        if (userDictionaryDirectory is null) return null;
+        var path = Path.Combine(userDictionaryDirectory, "romaji.txt");
+        try
+        {
+            return File.Exists(path) ? ParseCustomTable(File.ReadAllText(path)) : null;
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Warn($"ローマ字の表 (romaji.txt) を読めませんでした: {ex.Message}");
+            return null;
+        }
+    }
+
+    public static Dictionary<string, string> ParseCustomTable(string text)
+    {
+        var table = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line[0] == '#') continue;
+            var parts = line.Split(['\t', ' ', '　'], StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2) continue;
+            var spelling = parts[0].ToLowerInvariant();
+            if (!spelling.All(c => c is >= 'a' and <= 'z') || parts[1].Any(c => c is >= 'a' and <= 'z')) continue;
+            table[spelling] = parts[1];
+        }
+        return table;
+    }
+
     private static bool IsVowel(char c) => c is 'a' or 'i' or 'u' or 'e' or 'o';
     private static bool IsConsonant(char c) => c is >= 'a' and <= 'z' && !IsVowel(c);
 
@@ -163,7 +222,7 @@ public sealed class RomajiDetector
     private readonly ConcurrentDictionary<string, RomajiAnalysis> _looseCache = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RomajiAnalysis> _compositionCache = new(StringComparer.Ordinal);
 
-    private static RomajiAnalysis AnalyzeCore(string letters, bool strictStart, bool composition)
+    private RomajiAnalysis AnalyzeCore(string letters, bool strictStart, bool composition)
     {
         var tokens = new List<RomajiToken>();
         int strongYouon = 0, tsu = 0, sokuon = 0, longVowels = 0;
@@ -177,6 +236,14 @@ public sealed class RomajiDetector
         {
             var c = s[i];
             if (c is < 'a' or > 'z') return Invalid($"'{c}' は英字ではない");
+
+            // ユーザーのローマ字の表は、ん・っ の読み方を含めて組み込みの綴りより優先する (AZIK の kk = きん)
+            if (_custom is not null && MatchCustom(s, i) is { } custom)
+            {
+                tokens.Add(custom);
+                i += custom.Romaji.Length;
+                continue;
+            }
 
             if (c == 'n' && i + 1 < s.Length && (s[i + 1] == 'n' || (IsConsonant(s[i + 1]) && s[i + 1] != 'y')))
             {
@@ -215,7 +282,7 @@ public sealed class RomajiDetector
             if (matched) continue;
 
             var rest = s[i..];
-            if ((composition ? CompositionPartials : PartialSpellings).Contains(rest) || rest is "n" or "tc")
+            if ((composition ? CompositionPartials : PartialSpellings).Contains(rest) || rest is "n" or "tc" || _customPartials.Contains(rest))
             {
                 return new RomajiAnalysis(true, tokens.ToArray(), rest, null, strongYouon, tsu, sokuon, longVowels);
             }
@@ -223,6 +290,19 @@ public sealed class RomajiDetector
         }
 
         return new RomajiAnalysis(true, tokens.ToArray(), "", null, strongYouon, tsu, sokuon, longVowels);
+    }
+
+    /// <summary>s の i から始まる、ユーザーの表のいちばん長い綴り。無ければ null。</summary>
+    private RomajiToken? MatchCustom(string s, int i)
+    {
+        for (var length = Math.Min(_customMaxLength, s.Length - i); length >= 1; length--)
+        {
+            var piece = s.Substring(i, length);
+            // 表の綴りの頭で入力が終わっている (kz の k だけ) なら、続きを待つ (組み込みの綴りで読まない)
+            if (i + length == s.Length && length < _customMaxLength && _customPartials.Contains(piece) && !_custom!.ContainsKey(piece)) return null;
+            if (_custom!.TryGetValue(piece, out var kana)) return new RomajiToken(piece, kana);
+        }
+        return null;
     }
 
     private static bool EndsWithVowel(string romaji, char a, char b) =>

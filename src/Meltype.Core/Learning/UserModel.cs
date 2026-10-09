@@ -38,7 +38,6 @@ public sealed class UserModel
     public const int MinPrefixLength = 3;
     private const int MaxEntries = 5000;
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly object _gate = new();
     private readonly string? _path;
@@ -161,7 +160,7 @@ public sealed class UserModel
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var temp = _path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(new ModelFile { Version = 1, Prefixes = snapshot }, JsonOptions));
+            File.WriteAllText(temp, JsonSerializer.Serialize(new ModelFile { Version = 1, Prefixes = snapshot }, Config.IndentedLearningJsonContext.Default.ModelFile));
             File.Move(temp, _path, overwrite: true);
         }
         catch (Exception ex)
@@ -176,7 +175,7 @@ public sealed class UserModel
         if (_path is null || !File.Exists(_path)) return;
         try
         {
-            var file = JsonSerializer.Deserialize<ModelFile>(File.ReadAllText(_path));
+            var file = JsonSerializer.Deserialize(File.ReadAllText(_path), Config.LearningJsonContext.Default.ModelFile);
             if (file?.Prefixes is null) return;
             foreach (var (key, stats) in file.Prefixes)
             {
@@ -201,7 +200,7 @@ public sealed class UserModel
 
     private static PrefixStats Copy(PrefixStats s) => new() { Japanese = s.Japanese, English = s.English, LastUsed = s.LastUsed };
 
-    private sealed class ModelFile
+    internal sealed class ModelFile
     {
         [JsonPropertyName("version")] public int Version { get; set; }
         [JsonPropertyName("prefixes")] public Dictionary<string, PrefixStats>? Prefixes { get; set; }

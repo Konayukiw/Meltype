@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yukishiro
 
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Meltype.Composition;
@@ -28,6 +29,23 @@ public sealed class MozcConverter : IKanjiConverter, ILearningConverter, IDispos
     private Process? _process;
     private int _failures;
 
+    // 要る DLL が無くて起動できない (Visual C++ のランタイムが無いなど)。起動し直しても同じなので、もう試さない
+    private bool _missingDependency;
+
+    // Windows: 子プロセスを起動するあいだ、DLL が見つからないときのエラーの画面を出さない (子プロセスはこの設定を引き継ぐ)。
+    // 子プロセスが引き継ぐのはプロセス全体の設定だけなので、SetThreadErrorMode では効かない。起動したらすぐ戻す
+    private const uint SEM_FAILCRITICALERRORS = 0x0001;
+    private const uint SEM_NOOPENFILEERRORBOX = 0x8000;
+
+    [DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetErrorMode();
+
+    // STATUS_DLL_NOT_FOUND / STATUS_ENTRYPOINT_NOT_FOUND / STATUS_INVALID_IMAGE_FORMAT (起動のときに DLL を読み込めなかった)
+    private static bool IsLoaderFailure(int exitCode) => exitCode is unchecked((int)0xC0000135) or unchecked((int)0xC0000139) or unchecked((int)0xC000007B);
+
     /// <param name="helperPath">meltype_mozc_helper の実行ファイル。</param>
     /// <param name="profileDirectory">Mozc の学習データの保存先 (null なら Mozc の既定)。</param>
     public MozcConverter(string helperPath, string? profileDirectory)
@@ -40,7 +58,7 @@ public sealed class MozcConverter : IKanjiConverter, ILearningConverter, IDispos
     public bool IsInstalled => File.Exists(_helperPath);
 
     /// <summary>使えるか。何度も失敗したら諦める (毎回起動し直して入力が遅くなるのを避ける)。</summary>
-    public bool IsAvailable => IsInstalled && _failures < 3;
+    public bool IsAvailable => IsInstalled && _failures < 3 && !_missingDependency;
 
     public string? Convert(string hiragana) =>
         ConvertClauses(hiragana) is { Count: > 0 } clauses ? string.Concat(clauses.Select(c => c.Text)) : null;
@@ -195,13 +213,33 @@ public sealed class MozcConverter : IKanjiConverter, ILearningConverter, IDispos
             Directory.CreateDirectory(_profileDirectory);
             info.ArgumentList.Add(_profileDirectory);
         }
-        var process = Process.Start(info) ?? throw new InvalidOperationException("起動できませんでした");
+        Process process;
+        // 今の設定に足す (GetErrorMode で読む。SetErrorMode(0) で読むと、一瞬プロセス全体の設定が 0 になる)
+        var previousMode = 0u;
+        if (OperatingSystem.IsWindows())
+        {
+            previousMode = GetErrorMode();
+            SetErrorMode(previousMode | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+        }
+        try
+        {
+            process = Process.Start(info) ?? throw new InvalidOperationException("起動できませんでした");
+        }
+        finally
+        {
+            if (OperatingSystem.IsWindows()) SetErrorMode(previousMode);
+        }
         // Mozc のログ (標準エラー) は読み捨てる (溜まるとヘルパーが止まる)。
         process.ErrorDataReceived += (_, _) => { };
         process.BeginErrorReadLine();
         var ready = ReadLine(process, StartTimeoutMs);
         if (ready != "READY")
         {
+            if (process.WaitForExit(1000) && IsLoaderFailure(process.ExitCode))
+            {
+                _missingDependency = true;
+                Diagnostics.Log.Warn($"Mozc の変換ヘルパーを起動できません (DLL を読み込めない: 0x{process.ExitCode:X8}。同梱の Visual C++ のランタイムが無いか壊れている)。Microsoft IME だけで変換します。");
+            }
             try { process.Kill(); } catch { }
             process.Dispose();
             throw new InvalidOperationException($"起動に失敗しました: {ready ?? "応答なし"}");

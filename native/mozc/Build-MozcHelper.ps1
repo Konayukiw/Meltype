@@ -35,6 +35,32 @@ $bin = Join-Path $here 'bin'
 # ビルドする Mozc の版 (動作を確かめた commit に固定する)
 $commit = (Get-Content -Raw -LiteralPath (Join-Path $here 'MOZC_COMMIT')).Trim()
 
+if (-not $VcPath) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $vs) { throw 'Visual Studio (C++) が見つかりません。' }
+    $VcPath = Join-Path $vs 'VC'
+}
+
+# ヘルパーが使う Visual C++ のランタイム (MSVCP140.dll など) は、ビルドに使った Visual Studio から横に置く。
+# 「Visual C++ 再頒布可能パッケージ」が入っていない PC でも動くように (Microsoft が、アプリと一緒に配ることを認めているファイル)。
+# ビルドに使った Visual Studio に入っている、いちばん新しいランタイムにする (古い版のランタイムでは、新しい版でビルドしたヘルパーが落ちることがある。
+# ランタイムとビルドのツールは版の番号が一致しないので、番号では合わせない)。
+# どの DLL が要るかは、ビルドしたヘルパーを dumpbin で調べて決める (Mozc やビルドの設定で変わるので決め打ちしない)。
+# 無ければ配れないので、時間のかかるビルドの前に確かめて止める
+# Redist\MSVC\<版>\x64\Microsoft.VC*.CRT なので、2 つ上のフォルダーの名前が版
+$crt = Get-ChildItem (Join-Path $VcPath 'Redist\MSVC\*\x64\Microsoft.VC*.CRT') -Directory -ErrorAction SilentlyContinue |
+    Sort-Object { $v = $null; if ([version]::TryParse($_.Parent.Parent.Name, [ref]$v)) { $v } else { [version]'0.0' } } -Descending |
+    Select-Object -First 1
+if (-not $crt -or -not (Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll' -ErrorAction SilentlyContinue)) {
+    throw "Visual C++ のランタイム (Redist\MSVC) が見つかりません ($VcPath)。Visual Studio Installer で「C++ によるデスクトップ開発」を入れ直してください。"
+}
+# Tools\MSVC\<版>\bin\Hostx64\x64\dumpbin.exe (いちばん新しいツール)
+$dumpbin = Get-ChildItem (Join-Path $VcPath 'Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') -ErrorAction SilentlyContinue |
+    Sort-Object { $v = $null; if ([version]::TryParse($_.Directory.Parent.Parent.Parent.Name, [ref]$v)) { $v } else { [version]'0.0' } } -Descending |
+    Select-Object -First 1
+if (-not $dumpbin) { throw "dumpbin.exe が見つかりません ($VcPath)。Visual Studio Installer で「C++ によるデスクトップ開発」を入れ直してください。" }
+
 # src の有無ではなく .git で見る (GitHub Actions のキャッシュが src\third_party_cache だけを先に戻すため)。
 if (-not (Test-Path (Join-Path $MozcSource '.git'))) {
     New-Item -ItemType Directory -Force -Path $MozcSource | Out-Null
@@ -51,13 +77,6 @@ Copy-Item -LiteralPath (Join-Path $here 'meltype_mozc_helper.cc') -Destination (
 $build = Join-Path $src 'converter\BUILD.bazel'
 if (-not (Select-String -LiteralPath $build -Pattern 'name = "meltype_mozc_helper"' -Quiet)) {
     Add-Content -LiteralPath $build -Value ("`n" + (Get-Content -Raw -LiteralPath (Join-Path $here 'BUILD.fragment'))) -Encoding utf8
-}
-
-if (-not $VcPath) {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if (-not $vs) { throw 'Visual Studio (C++) が見つかりません。' }
-    $VcPath = Join-Path $vs 'VC'
 }
 
 Push-Location $src
@@ -81,4 +100,34 @@ Copy-Item -LiteralPath (Join-Path $src 'bazel-bin\converter\meltype_mozc_helper.
 # Mozc と辞書 (IPAdic など)・ライブラリのライセンス
 Copy-Item -LiteralPath (Join-Path $src 'data\installer\credits_en.html') -Destination (Join-Path $bin 'MOZC-CREDITS.html') -Force
 Copy-Item -LiteralPath (Join-Path $MozcSource 'LICENSE') -Destination (Join-Path $bin 'MOZC-LICENSE.txt') -Force
+# ヘルパーが読み込む DLL のうち、Visual C++ のランタイムにあるものを横に置く。置いた DLL がさらに読み込むものも辿る。
+# ランタイムにも Windows にも無い DLL を使っていたら、配っても動かないので止める
+$helper = Join-Path $bin 'meltype_mozc_helper.exe'
+$system = [Environment]::SystemDirectory
+$seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+$placed = New-Object 'System.Collections.Generic.List[string]'
+$queue = New-Object 'System.Collections.Generic.Queue[string]'
+$queue.Enqueue($helper)
+while ($queue.Count -gt 0) {
+    $file = $queue.Dequeue()
+    $dependents = & $dumpbin.FullName /nologo /dependents $file | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[\w.-]+\.dll$' }
+    if ($LASTEXITCODE -ne 0) { throw "dumpbin で $file を調べられませんでした。" }
+    foreach ($dll in $dependents) {
+        if (-not $seen.Add($dll)) { continue }
+        # 名前の大文字・小文字は、ランタイムのファイルに合わせる (dumpbin は大文字で出すことがある)
+        $runtime = Get-ChildItem -LiteralPath $crt.FullName -Filter $dll -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($runtime) {
+            Copy-Item -LiteralPath $runtime.FullName -Destination $bin -Force
+            $placed.Add($runtime.Name)
+            $queue.Enqueue($runtime.FullName)
+        }
+        elseif ($dll -notlike 'api-ms-win-*' -and $dll -notlike 'ext-ms-*' -and -not (Test-Path -LiteralPath (Join-Path $system $dll))) {
+            throw "ヘルパーが使う $dll が、Visual C++ のランタイム ($($crt.FullName)) にも Windows にもありません。"
+        }
+    }
+}
+if ($placed.Count -eq 0) { throw 'ヘルパーが Visual C++ のランタイムを使っていません (dumpbin の出力を読めなかった可能性があります)。' }
+# 置いたランタイムの一覧 (Build-Package.ps1 が、全部そろっているかを確かめるのに使う)
+Set-Content -LiteralPath (Join-Path $bin 'VC-RUNTIME.txt') -Value $placed -Encoding ASCII
+Write-Host "Visual C++ のランタイムを置きました ($($crt.FullName)): $($placed -join ', ')"
 Write-Host "作成しました: $bin"

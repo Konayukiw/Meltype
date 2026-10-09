@@ -19,11 +19,16 @@ internal sealed class UiAutomation
         IsKeyboardFocusableProperty = 30009, ClassNameProperty = 30012, IsPasswordProperty = 30019,
         ValueValueProperty = 30045, ValueIsReadOnlyProperty = 30046, IsValuePatternAvailableProperty = 30043,
         IsTextPatternAvailableProperty = 30040;
-    private const int TextPatternId = 10014;
+    private const int TextPatternId = 10014, LegacyIAccessiblePatternId = 10018;
+    private const int Ia2StateEditable = 0x8;
+    private const int Ia2StatesVTableSlot = 35;
     private const int TextUnitCharacter = 0;
     private const int EndpointStart = 0, EndpointEnd = 1;
 
     private static readonly Guid ClsidCUIAutomation = new("FF48DBA4-60EF-4201-AA87-54103EEF594E");
+    private static readonly Guid IidIServiceProvider = new("6D5140C1-7436-11CE-8034-00AA006009FA");
+    private static readonly Guid IidIAccessible = new("618736E0-3C3D-11CF-810C-00AA00389B71");
+    private static readonly Guid IidIAccessible2 = new("E89F726E-C4F4-4C19-BB19-B647D7FA8478");
 
     private readonly IUIAutomation _automation;
 
@@ -64,6 +69,79 @@ internal sealed class UiAutomation
         public bool HasTextPattern => Get(IsTextPatternAvailableProperty) is true;
         public bool IsReadOnly => Get(ValueIsReadOnlyProperty) is true;
         public string Value => Get(ValueValueProperty) as string ?? "";
+
+        /// <summary>
+        /// UI Automation では入力欄と分からない要素が、IAccessible2 では編集可能として
+        /// 公開されているか調べる。Chromium / Electron の contenteditable などで使う。
+        /// </summary>
+        public unsafe bool IsIa2Editable()
+        {
+            try
+            {
+                if (_element.GetCurrentPattern(LegacyIAccessiblePatternId, out var patternObject) < 0 ||
+                    patternObject is not IUIAutomationLegacyIAccessiblePattern pattern ||
+                    pattern.GetIAccessible(out var accessible) < 0 ||
+                    accessible == IntPtr.Zero)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    var serviceProviderIid = IidIServiceProvider;
+                    if (Marshal.QueryInterface(accessible, in serviceProviderIid, out var serviceProvider) < 0 ||
+                        serviceProvider == IntPtr.Zero)
+                    {
+                        return false;
+                    }
+
+                    try
+                    {
+                        var service = IidIAccessible;
+                        var iid = IidIAccessible2;
+                        IntPtr ia2 = IntPtr.Zero;
+
+                        var hr =
+                            ((delegate* unmanaged[Stdcall]<IntPtr, Guid*, Guid*, IntPtr*, int>)
+                                VTable(serviceProvider, 3))(
+                                    serviceProvider, &service, &iid, &ia2);
+
+                        if (hr < 0 || ia2 == IntPtr.Zero) return false;
+
+                        try
+                        {
+                            int states;
+                            hr =
+                                ((delegate* unmanaged[Stdcall]<IntPtr, int*, int>)
+                                    VTable(ia2, Ia2StatesVTableSlot))(
+                                        ia2, &states);
+
+                            return hr >= 0 && (states & Ia2StateEditable) != 0;
+                        }
+                        finally
+                        {
+                            Marshal.Release(ia2);
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(serviceProvider);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(accessible);
+                }
+            }
+            catch
+            {
+                // IAccessible2 を使えない要素・アプリでは、従来の判定だけを使う。
+                return false;
+            }
+        }
+
+        private static unsafe IntPtr VTable(IntPtr instance, int slot) =>
+            (*(IntPtr**)instance)[slot];
 
         /// <summary>単一の選択範囲を取得。無ければ null。</summary>
         private IUIAutomationTextRange? SelectionRange()
@@ -180,6 +258,35 @@ internal sealed class UiAutomation
         [PreserveSig] int GetCurrentPatternAs();
         [PreserveSig] int GetCachedPatternAs();
         [PreserveSig] int GetCurrentPattern(int patternId, [MarshalAs(UnmanagedType.IUnknown)] out object? pattern);
+    }
+
+    [ComImport, Guid("828055AD-355B-4435-86D5-3B51C14A9B1B"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IUIAutomationLegacyIAccessiblePattern
+    {
+        [PreserveSig] int Select();
+        [PreserveSig] int DoDefaultAction();
+        [PreserveSig] int SetValue();
+        [PreserveSig] int get_CurrentChildId();
+        [PreserveSig] int get_CurrentName();
+        [PreserveSig] int get_CurrentValue();
+        [PreserveSig] int get_CurrentDescription();
+        [PreserveSig] int get_CurrentRole();
+        [PreserveSig] int get_CurrentState();
+        [PreserveSig] int get_CurrentHelp();
+        [PreserveSig] int get_CurrentKeyboardShortcut();
+        [PreserveSig] int GetCurrentSelection();
+        [PreserveSig] int get_CurrentDefaultAction();
+        [PreserveSig] int get_CachedChildId();
+        [PreserveSig] int get_CachedName();
+        [PreserveSig] int get_CachedValue();
+        [PreserveSig] int get_CachedDescription();
+        [PreserveSig] int get_CachedRole();
+        [PreserveSig] int get_CachedState();
+        [PreserveSig] int get_CachedHelp();
+        [PreserveSig] int get_CachedKeyboardShortcut();
+        [PreserveSig] int GetCachedSelection();
+        [PreserveSig] int get_CachedDefaultAction();
+        [PreserveSig] int GetIAccessible(out IntPtr accessible);
     }
 
     [ComImport, Guid("32EBA289-3583-42C9-9C59-3B6D9A1E9B6A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

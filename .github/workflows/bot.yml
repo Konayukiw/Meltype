@@ -1,8 +1,11 @@
 # Meltype の GitHub bot。
 #   Issue を作った・直したとき: OS のラベルと「要トリアージ」を付け、足りない情報を聞き、誤判定の報告なら最新のコードで打ってみて結果を返す。
-#   コメントの 1 行目のコマンド: /repro /explain /help (だれでも)、/test /pack (Pull Request で、メンテナーだけ)。
+#   コメントの 1 行目のコマンド:
+#     だれでも: /repro /explain /jht /help
+#     メンテナー (PR のみ): /test /pack /test-repro /test-jht /test-explain
 # Issue・コメントの文は誰でも書けるので、run: の中に ${{ }} で埋め込まず、環境変数で値として渡す。
 # Pull Request のコードは、書き込みの権限を持たない job (pr) でだけ動かす。結果のコメントは別の job (report) が書く。
+# 漢字変換には最新リリースの meltype_mozc_helper を使う (毎回 Bazel ビルドしない)。
 name: bot
 
 on:
@@ -10,16 +13,51 @@ on:
     types: [opened, edited]
   issue_comment:
     types: [created]
+  pull_request_target:
+    types: [opened, reopened]
 
 permissions: {}
 
 concurrency:
-  group: bot-${{ github.event.issue.number }}-${{ github.event.comment.id || 'issue' }}
+  group: bot-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event.comment.id || github.event.action || 'event' }}
   cancel-in-progress: true
 
 jobs:
-  parse:
+  # PR 作成時: pr ラベルを付ける (pull_request_target なので fork からも動く。コードは触らない)
+  pr-label:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      # コードは checkout しない (pull_request_target で PR のコードを動かさない)
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const name = 'pr';
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name,
+                color: '0E8A16',
+                description: 'Pull Request',
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e; // 既にある
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: [name],
+            });
+
+  parse:
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
@@ -35,14 +73,13 @@ jobs:
       sha: ${{ steps.parse.outputs.sha }}
       comment: ${{ steps.parse.outputs.comment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           sparse-checkout: .github/bot
           persist-credentials: false
-      # GitHub App (Meltype bot) の鍵が登録されていれば、その名前でコメントする。無ければ github-actions[bot] の名前で。
       - id: app
         if: vars.BOT_APP_ID != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
@@ -51,21 +88,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app.outputs.token || github.token }}
 
-  # 誤判定の再現・判定理由 (main と、最新のリリースのコード)。Issue の文は値として渡すだけ。
+  # main 上での repro / explain / jht
   run:
     needs: parse
-    if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'explain'
+    if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'explain' || needs.parse.outputs.action == 'jht'
     runs-on: windows-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: 10.0.x
+      - name: Mozc helper from latest release
+        if: needs.parse.outputs.action == 'repro' || needs.parse.outputs.action == 'jht'
+        shell: pwsh
+        run: |
+          $bin = 'native/mozc/bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $api = 'https://api.github.com/repos/yksr-melt/Meltype/releases/latest'
+          $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'meltype-bot' }
+          $asset = $rel.assets | Where-Object { $_.name -like 'Meltype-*-windows.zip' } | Select-Object -First 1
+          if (-not $asset) { Write-Host 'Windows リリースが見つかりません (Mozc なしで続行)'; exit 0 }
+          $zip = Join-Path $env:RUNNER_TEMP 'meltype-win.zip'
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
+          $extract = Join-Path $env:RUNNER_TEMP 'meltype-win'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $helper = Get-ChildItem -Path $extract -Recurse -Filter 'meltype_mozc_helper.exe' | Select-Object -First 1
+          if (-not $helper) { Write-Host 'zip に meltype_mozc_helper.exe がありません'; exit 0 }
+          Copy-Item $helper.FullName (Join-Path $bin 'meltype_mozc_helper.exe') -Force
+          $full = (Resolve-Path (Join-Path $bin 'meltype_mozc_helper.exe')).Path
+          "MELTYPE_MOZC=$full" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "MELTYPE_MOZC=$full"
       - name: Run
         shell: pwsh
         env:
@@ -77,36 +135,62 @@ jobs:
           [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
           New-Item -ItemType Directory -Force results | Out-Null
           if ($env:ACTION -eq 'explain') {
-            dotnet run --project src/Meltype.Core.Tests -c Release -- --explain $env:KEYS | Out-File results/explain.txt
+            dotnet run --project src/Meltype.Core.Tests -c Release -- --explain "$env:KEYS" | Out-File results/explain.txt
             exit 0
           }
-          dotnet run --project src/Meltype.Tests -c Release -- --repro $env:KEYS $env:LAST | Out-File results/repro-main.json
-          # 最新のリリース (タグ v*) にも --repro があれば、その版でも打ってみる (直ったか・いつから壊れたかの手がかり)
+          if ($env:ACTION -eq 'jht') {
+            # KEYS は「出てほしい文」または「文 / 読み」(空白付きでも 1 引数)
+            dotnet run --project src/Meltype.Core.Tests -c Release -- --jht "$env:KEYS" | Out-File results/jht.json -Encoding utf8NoBOM
+            exit 0
+          }
+          # repro (Mozc があれば漢字も)
+          dotnet run --project src/Meltype.Tests -c Release -- --repro "$env:KEYS" "$env:LAST" | Out-File results/repro-main.json -Encoding utf8
           $tag = git tag -l 'v*' --sort=-v:refname | Select-Object -First 1
           if ($tag -and (git ls-tree --name-only $tag src/Meltype.Core.Tests/Repro.cs)) {
             git worktree add ../release $tag
-            dotnet run --project ../release/src/Meltype.Tests -c Release -- --repro $env:KEYS $env:LAST | Out-File "results/repro-$tag.json"
+            $env:MELTYPE_MOZC = $env:MELTYPE_MOZC  # 同じヘルパーを共有
+            dotnet run --project ../release/src/Meltype.Tests -c Release -- --repro "$env:KEYS" "$env:LAST" | Out-File "results/repro-$tag.json" -Encoding utf8
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: bot-results
           path: results/
+          retention-days: 7
 
-  # Pull Request のコードでテスト / zip を作る (メンテナーのコマンドのときだけ)。書き込みの権限なし。
+  # PR のコードで test / pack / test-repro / test-jht / test-explain (メンテナーのみ。parse で author_association を確認済み)
   pr:
     needs: parse
-    if: needs.parse.outputs.action == 'test' || needs.parse.outputs.action == 'pack'
+    if: contains(fromJSON('["test","pack","test-repro","test-jht","test-explain"]'), needs.parse.outputs.action)
     runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.parse.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: 10.0.x
+      - name: Mozc helper from latest release
+        if: needs.parse.outputs.action == 'test-repro' || needs.parse.outputs.action == 'test-jht'
+        shell: pwsh
+        run: |
+          $bin = 'native/mozc/bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/yksr-melt/Meltype/releases/latest' -Headers @{ 'User-Agent' = 'meltype-bot' }
+          $asset = $rel.assets | Where-Object { $_.name -like 'Meltype-*-windows.zip' } | Select-Object -First 1
+          if (-not $asset) { Write-Host 'Windows リリースが見つかりません'; exit 0 }
+          $zip = Join-Path $env:RUNNER_TEMP 'meltype-win.zip'
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
+          $extract = Join-Path $env:RUNNER_TEMP 'meltype-win'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $helper = Get-ChildItem -Path $extract -Recurse -Filter 'meltype_mozc_helper.exe' | Select-Object -First 1
+          if (-not $helper) { exit 0 }
+          Copy-Item $helper.FullName (Join-Path $bin 'meltype_mozc_helper.exe') -Force
+          $full = (Resolve-Path (Join-Path $bin 'meltype_mozc_helper.exe')).Path
+          "MELTYPE_MOZC=$full" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Test
         if: needs.parse.outputs.action == 'test'
         shell: pwsh
@@ -119,38 +203,59 @@ jobs:
         if: needs.parse.outputs.action == 'pack'
         shell: powershell
         run: .\Build-Package.ps1
-      - if: needs.parse.outputs.action == 'test'
-        uses: actions/upload-artifact@v4
+      - name: test-repro / test-jht / test-explain
+        if: contains(fromJSON('["test-repro","test-jht","test-explain"]'), needs.parse.outputs.action)
+        shell: pwsh
+        env:
+          ACTION: ${{ needs.parse.outputs.action }}
+          KEYS: ${{ needs.parse.outputs.keys }}
+          LAST: ${{ needs.parse.outputs.last }}
+          MELTYPE_UTF8: '1'
+        run: |
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+          New-Item -ItemType Directory -Force results | Out-Null
+          if ($env:ACTION -eq 'test-explain') {
+            dotnet run --project src/Meltype.Core.Tests -c Release -- --explain "$env:KEYS" | Out-File results/explain.txt -Encoding utf8
+          } elseif ($env:ACTION -eq 'test-jht') {
+            dotnet run --project src/Meltype.Core.Tests -c Release -- --jht "$env:KEYS" | Out-File results/jht.json -Encoding utf8NoBOM
+          } else {
+            dotnet run --project src/Meltype.Tests -c Release -- --repro "$env:KEYS" "$env:LAST" | Out-File results/repro-pr.json -Encoding utf8
+          }
+      - if: needs.parse.outputs.action != 'pack'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: bot-results
           path: results/
+          retention-days: 7
       - if: needs.parse.outputs.action == 'pack'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: meltype-pr-${{ needs.parse.outputs.issue }}
           path: dist/Meltype-test-*.zip
+          retention-days: 14
 
   report:
     needs: [parse, run, pr]
     if: always() && needs.parse.result == 'success' && needs.parse.outputs.action != 'none' && needs.parse.outputs.action != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           sparse-checkout: .github/bot
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         continue-on-error: true
         with:
           name: bot-results
           path: results/
       - id: app
         if: vars.BOT_APP_ID != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}

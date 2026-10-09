@@ -52,8 +52,10 @@ public sealed class ProperNouns
     public IEnumerable<string> LowercaseWords => _canonical.Keys;
 
     public bool Contains(string lower) => _canonical.ContainsKey(lower);
+    internal bool Contains(ReadOnlySpan<char> lower) => _canonical.GetAlternateLookup<ReadOnlySpan<char>>().ContainsKey(lower);
 
     public bool HasPrefix(string lower) => _words.HasPrefix(lower);
+    internal bool HasPrefix(ReadOnlySpan<char> lower) => _words.HasPrefix(lower);
 
     /// <summary>正しい大文字小文字の形。固有名詞でなければ null。</summary>
     public string? Canonical(string lower) => _canonical.TryGetValue(lower, out var word) ? word : null;

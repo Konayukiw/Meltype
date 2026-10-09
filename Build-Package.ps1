@@ -30,6 +30,16 @@ if ($LASTEXITCODE -ne 0) { throw "ビルドに失敗しました (exit code $LAS
 # Mozc の変換ヘルパー (native\mozc\Build-MozcHelper.ps1 で作ったもの) を同梱する。無ければ Microsoft IME だけで動く。
 $mozcBin = Join-Path $root 'native\mozc\bin'
 if (Test-Path -LiteralPath (Join-Path $mozcBin 'meltype_mozc_helper.exe')) {
+    # ヘルパーが使う Visual C++ のランタイム (MSVCP140.dll など) は、Build-MozcHelper.ps1 がビルドに使った Visual Studio から bin に置いている。
+    # 前の版の Build-MozcHelper.ps1 で作った bin には無い。版がずれないよう、ほかから補わずに止める
+    # (無いまま配ると、「Visual C++ 再頒布可能パッケージ」が入っていない PC でヘルパーが起動できない)
+    # どれを置いたかは、Build-MozcHelper.ps1 が VC-RUNTIME.txt に書いている (ヘルパーを dumpbin で調べて決めたもの)
+    $runtimeList = Join-Path $mozcBin 'VC-RUNTIME.txt'
+    $runtimeDlls = if (Test-Path -LiteralPath $runtimeList) { @(Get-Content -LiteralPath $runtimeList | Where-Object { $_.Trim() }) } else { @() }
+    $missing = $runtimeDlls | Where-Object { -not (Test-Path -LiteralPath (Join-Path $mozcBin $_)) }
+    if ($runtimeDlls.Count -eq 0 -or $missing) {
+        throw "Mozc の変換ヘルパーと一緒に置く Visual C++ のランタイムがありません ($(if ($missing) { $missing -join ', ' } else { 'VC-RUNTIME.txt' }))。native\mozc\Build-MozcHelper.ps1 でヘルパーを作り直してください。"
+    }
     New-Item -ItemType Directory -Force -Path (Join-Path $app 'mozc') | Out-Null
     Copy-Item -Path (Join-Path $mozcBin '*') -Destination (Join-Path $app 'mozc') -Force
     Write-Host 'Mozc の変換ヘルパーを同梱しました。'
@@ -142,6 +152,24 @@ foreach ($file in Get-ChildItem (Join-Path $runtime 'shared') -Recurse -Filter '
 Update-DepsJson
 Invoke-SelfTest '読み込まれない部品も削った後' | Out-Null
 
+# Meltype IME (入力欄に直接入力する TSF の DLL)。x64 と x86 (32bit のアプリ用) をビルドして同梱する。
+# C++ のビルドツールが無ければ、Meltype IME を入れずに作る (変換ボックスの方式だけの zip になる)
+$tip = Join-Path $app 'tip'
+$imeBuilt = $true
+try { & (Join-Path $root 'native\tip\build.ps1') -Configuration Release }
+catch {
+    $imeBuilt = $false
+    Write-Warning "Meltype IME をビルドできないので、入れずに作ります: $($_.Exception.Message)"
+}
+if ($imeBuilt) {
+    foreach ($arch in 'x64', 'x86') {
+        New-Item -ItemType Directory -Force -Path (Join-Path $tip $arch) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root "native\tip\bin\$arch\MeltypeTip.dll"), (Join-Path $root "native\tip\bin\$arch\MeltypeTip.dll.sha256") -Destination (Join-Path $tip $arch)
+    }
+    Copy-Item -LiteralPath (Join-Path $root 'native\tip\Register-Tip.ps1') -Destination $tip
+    Copy-Item -LiteralPath (Join-Path $root 'packaging\meltype-ime.ps1') -Destination $app
+}
+
 # コード署名 (証明書があるときだけ): 環境変数 MELTYPE_SIGN_PFX (証明書の .pfx) と MELTYPE_SIGN_PASSWORD を設定すると、
 # Meltype.exe・Meltype.dll・Mozc のヘルパーに署名する (SmartScreen の警告とウイルス対策ソフトの誤検知を減らすため)。
 # GitHub Actions では、秘密 SIGN_PFX_BASE64 / SIGN_PASSWORD を登録すると build.yml が設定する。
@@ -149,7 +177,7 @@ if ($env:MELTYPE_SIGN_PFX -and (Test-Path -LiteralPath $env:MELTYPE_SIGN_PFX)) {
     $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -like '*\x64\*' } | Sort-Object FullName | Select-Object -Last 1
     if (-not $signtool) { throw 'signtool.exe が見つかりません (Windows SDK が必要です)。' }
-    $targets = @('Meltype.exe', 'Meltype.dll', 'Meltype.Core.dll', 'mozc\meltype_mozc_helper.exe') |
+    $targets = @('Meltype.exe', 'Meltype.dll', 'Meltype.Core.dll', 'mozc\meltype_mozc_helper.exe', 'tip\x64\MeltypeTip.dll', 'tip\x86\MeltypeTip.dll') |
         ForEach-Object { Join-Path $app $_ } | Where-Object { Test-Path -LiteralPath $_ }
     & $signtool.FullName sign /f $env:MELTYPE_SIGN_PFX /p $env:MELTYPE_SIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $targets
     if ($LASTEXITCODE -ne 0) { throw "署名に失敗しました (exit code $LASTEXITCODE)。" }
@@ -157,6 +185,15 @@ if ($env:MELTYPE_SIGN_PFX -and (Test-Path -LiteralPath $env:MELTYPE_SIGN_PFX)) {
 }
 else {
     Write-Host '証明書が無いので署名しません (MELTYPE_SIGN_PFX)。'
+}
+
+# 配布する Meltype IME の DLL (署名した後) のハッシュ。インストールのとき、管理者として登録する前に、DLL が書き換えられていないかを確かめるのに使う。
+# (MeltypeTip.dll.sha256 は署名する前の中身のハッシュで、更新のときに「同じ DLL か」を比べるのに使う)
+foreach ($arch in @(if ($imeBuilt) { 'x64', 'x86' })) {
+    $dll = Join-Path $app "tip\$arch\MeltypeTip.dll"
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $hash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($dll))).Replace('-', '') } finally { $sha.Dispose() }
+    [IO.File]::WriteAllText("$dll.package.sha256", $hash)
 }
 
 # 自動更新の確認に使う (Meltype が app フォルダーから呼ぶ)
