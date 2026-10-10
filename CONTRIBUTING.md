@@ -34,6 +34,14 @@ Mac 版・Linux 版はプレビュー版です。気づいたことは小さな�
 
 <br>
 
+<a name="pull-request-を送る場合"></a>
+<img src="docs/images/headings/contributing/07.svg" alt="Pull Request を送る場合" height="53"><br>
+
+Issue を直す Pull Request を送るつもりの場合は、その Issue のコメントに自分が対応することを書いてから、修正に取りかかってください。
+同じ Issue を何人もが同時に直してしまうのを防ぐためです。
+
+<br>
+
 <a name="コードの貢献と貢献者ライセンス同意-cla"></a>
 <img src="docs/images/headings/contributing/03.svg" alt="コードの貢献と貢献者ライセンス同意 (CLA)" height="53"><br>
 
