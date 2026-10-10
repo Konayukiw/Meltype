@@ -363,19 +363,20 @@ async function report() {
   }
 
   if (action === 'ca') {
-    const kind = `ca-${process.env.BOT_COMMENT_ID}`;
+    const marker = `ca-${process.env.BOT_COMMENT_ID}`;
     const versions = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.startsWith('repro-')).sort() : [];
-    if (versions.length === 0) {
-      await upsertComment(issue, kind, `候補を出せませんでした ([実行結果](${runUrl}))。`);
-      return;
-    }
     const results = versions.map(file => ({
       name: file.replace(/^repro-/, '').replace(/\.json$/, ''),
       r: readJson(path.join(dir, file)),
     }));
+    // 結果が無い・どれも読めない (dotnet run の失敗など) ときは、Mozc が無いせいにせず実行の失敗として返す
+    if (results.every(v => !v.r)) {
+      await upsertComment(issue, marker, `候補を出せませんでした ([実行結果](${runUrl}))。`);
+      return;
+    }
     const engine = results.map(v => v.r?.engine).find(Boolean) ?? '';
     if (!results.some(v => /Mozc/i.test(v.r?.engine ?? ''))) {
-      await upsertComment(issue, kind, `ℹ️ Mozc の変換ヘルパーが使えなかったため、候補を出せませんでした。\n\n[実行結果](${runUrl})`);
+      await upsertComment(issue, marker, `ℹ️ Mozc の変換ヘルパーが使えなかったため、候補を出せませんでした。\n\n[実行結果](${runUrl})`);
       return;
     }
     const clauseCell = ({ r }) => {
@@ -404,7 +405,7 @@ async function report() {
       lines.push('');
     }
     lines.push(`<sub>変換エンジン: ${engine}。[実行結果](${runUrl})</sub>`);
-    await upsertComment(issue, kind, lines.join('\n'));
+    await upsertComment(issue, marker, lines.join('\n'));
     return;
   }
 
