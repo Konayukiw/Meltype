@@ -291,10 +291,11 @@ public sealed class FocusInspector : IDisposable
                 // 選ぶだけのドロップダウン (設定画面の はい/いいえ など) は文字を打つ欄ではない。打ち込める ComboBox だけ。
                 editable = element.HasValuePattern && !element.IsReadOnly;
             }
-            else if (element.ClassName?.Contains("autocomplete", StringComparison.OrdinalIgnoreCase) == true)
+            else if (element.ClassName?.Contains("autocomplete", StringComparison.OrdinalIgnoreCase) == true ||
+                element.ClassName?.Contains("OmniLinkItem", StringComparison.Ordinal) == true)
             {
-                // 入力欄の候補の一覧 (Discord の @メンション・#チャンネルの候補)。フォーカスは候補の行に移るが、
-                // 打った文字は入力欄に入るので、入力欄として扱う。
+                // 入力欄の候補の一覧 (Discord の @メンション・#チャンネルの候補、Vivaldi の検索欄・アドレスバーの候補)。
+                // フォーカスは候補の行に移るが、打った文字は入力欄に入るので、入力欄として扱う。
                 editable = true;
             }
             else if (element.HasTextPattern && element.IsKeyboardFocusable)
