@@ -682,6 +682,29 @@ internal static class LanguageLearningTests
     }
 
     [Test]
+    public static void ShortHeadThenCapital_IsName()
+    {
+        // #266: McAfeeto が McA|feeto で切れて McAふぇえと になっていた。Mc・Le の後ろの大文字で終わる頭 (McA・LeB) は略語ではなく名前の途中
+        foreach (var (typed, expected) in new[]
+        {
+            ("McAfeeto", "McAfeeと"), ("McAfeewo", "McAfeeを"), ("McAfeede", "McAfeeで"), ("LeBronde", "LeBronで"),
+            // 英単語 + 大文字 1 文字・大文字が続く略語は今までどおり区切る
+            ("PlanBdeiku", "PlanBでいく"), ("TypeAnohou", "TypeAのほう"), ("OrpCde", "OrpCで"), ("oRPCde", "oRPCで"), ("ORPCde", "ORPCで"),
+            ("OCRwoshi", "OCRをし"), ("DeNAde", "DeNAで"), ("OpenAIno", "OpenAIの"), ("Anisiyouka", "Aにしようか"), ("MrXde", "MrXで"),
+            ("McAfee", "McAfee"), ("McKinseyde", "McKinseyで"), ("McDonaldsde", "McDonaldsで"),
+        })
+        {
+            var k = new CompositionTests.Keyboard();
+            k.Type(typed + "\n");
+            Assert.Equal(expected, k.Host.Document, typed);
+        }
+
+        var typing = new CompositionTests.Keyboard();
+        typing.Type("McAfeeto");
+        Assert.Equal("McAfeeと", typing.Showing);
+    }
+
+    [Test]
     public static void AllowInjectedInput_IsSharedAndOffByDefault()
     {
         // 遠隔操作 (AnyDesk・VNC) のキーも処理する設定 (issue #110)。既定は OFF、保存して残り、全プロファイル共通
