@@ -24,6 +24,14 @@ public sealed partial class CompositionDetector
     private readonly ProperNouns _proper;
     private readonly KanaDetector? _kana;
 
+    /// <summary>ローマ字としても読める、よく使う拡張子 (Meltype.ace、setup.ini)。読めない拡張子 (dll、json) は一覧に無くても英字のまま。</summary>
+    private static readonly HashSet<string> FileExtensions =
+    [
+        "a", "ace", "ada", "ado", "ann", "ape", "ase", "dae", "di", "do", "fifo", "fon", "geo", "go", "ifo", "ii", "ini", "ino", "ipa", "iso", "jade", "ko",
+        "ma", "metadata", "midi", "mime", "mo", "mobi", "o", "oga", "ora", "oso", "otio", "po", "pyo", "ra", "re", "rego", "rei", "resi", "ru", "sami",
+        "so", "suo", "tese", "ufo", "vue",
+    ];
+
     private static readonly HashSet<string> DomainSuffixes = ["ai", "app", "au", "biz", "ca", "cn", "co", "com", "de", "dev", "edu", "eu", "fr", "gg", "gov", "info", "in", "io", "jp", "kr", "me", "net", "org", "uk", "us", "xyz"];
 
     public CompositionDetector(RomajiDetector romaji, DictionaryDetector japanese, EnglishDetector english, TypoDetector typo, ProperNouns? proper = null,
@@ -185,19 +193,8 @@ public sealed partial class CompositionDetector
         while (i < n)
         {
             var found = -1;
-            // ドメインの . の後ろは、短い国別・用途別トップレベルドメインでも英字のままにする (tetr.io、Wakatte.TV)。
-            if (!kanaInput && level != DetectionLevel.Manual && i > 0 && units[i - 1].Raw == "." && PrecededByEnglish(i) == true)
-            {
-                for (var j = n; j > i; j--)
-                {
-                    var domainLabel = (Raw(units, i, j) + (j == n ? pending : "")).ToLowerInvariant();
-                    if (DomainSuffixes.Contains(domainLabel) || !final && DomainSuffixes.Any(tld => tld.StartsWith(domainLabel, StringComparison.Ordinal)))
-                    {
-                        found = j;
-                        break;
-                    }
-                }
-            }
+            // ドメイン・拡張子の . の後ろは、ローマ字として読めても英字のままにする (tetr.io、Wakatte.TV、MeltypeTip.dll)。
+            if (!kanaInput && level != DetectionLevel.Manual && i > 0 && units[i - 1].Raw == "." && PrecededByEnglish(i) == true) found = DotSuffixEnd(units, i, pending, final);
             // 英文の中の記号 (, . ! ? -) は読点・句点にせず半角のまま。日本語の文の中の英単語の後 (今日はgoogle、) は日本語の記号。
             // (かな入力では 、。 も かなのキーなので対象外)
             if (!kanaInput && IsAsciiSymbol(units[i]) && PrecededByEnglish(i) == true && segments.All(s => s.IsEnglish || !s.Raw.Any(char.IsAsciiLetter))) found = i + 1;
@@ -624,12 +621,12 @@ public sealed partial class CompositionDetector
             // 後ろが助詞 1 つだけ (OCR|wo、English|ga) なら 2 文字でもよい
             if ((rest.Length < 3 && Detection.DictionaryDetector.StartsWithParticle(rest) != rest) || !rest.All(c => char.IsAsciiLetterLower(c) || c == '-') || !char.IsAsciiLetterLower(rest[0])) continue;
             // 知っている英単語・略語 (English、OCR) の後ろが助詞で始まるなら、その後ろに英単語が続いても (English|wo|happy) 区切る
-            var knownHead = head.Length >= 2 && char.IsAsciiLetterUpper(head[^1]) || head.Length >= 3 && IsKnownCapitalizedWord(head) || head.Length >= 4 && IsSpellWord(head.ToLowerInvariant());
+            var knownHead = EndsWithAcronym(head) || head.Length >= 3 && IsKnownCapitalizedWord(head) || head.Length >= 4 && IsSpellWord(head.ToLowerInvariant());
             if (knownHead && Detection.DictionaryDetector.StartsWithParticle(rest) is not null) return k;
             var analysis = _romaji.AnalyzeFragment(rest.Replace("-", ""));
             if (!analysis.IsValid || (final && analysis.Partial.Length > 0 && analysis.Partial != "n")) continue;
             // 大文字で終わる略語 (OCR)、知っている語 (Tokyo)、スペルチェッカーの 4 文字以上の語 (English)
-            if (head.Length >= 2 && char.IsAsciiLetterUpper(head[^1]) || head.Length >= 3 && IsKnownCapitalizedWord(head) || head.Length >= 4 && IsSpellWord(head.ToLowerInvariant())) return k;
+            if (EndsWithAcronym(head) || head.Length >= 3 && IsKnownCapitalizedWord(head) || head.Length >= 4 && IsSpellWord(head.ToLowerInvariant())) return k;
             // 大文字 1 文字 + 助詞で始まるローマ字 (A|nisiyouka → Aにしようか、B|noan → Bの案)。
             // 名前 (Tanaka、Hanako) を区切らないよう、後ろが助詞で始まるときだけ。
             if (head.Length == 1 && char.IsAsciiLetterUpper(head[0]) && Detection.DictionaryDetector.StartsWithParticle(rest.Replace("-", "")) is not null) return k;
@@ -647,6 +644,16 @@ public sealed partial class CompositionDetector
         }
         return -1;
     }
+
+    // 大文字で終わる略語と見なす頭の最小の長さ。3 文字以下 (McA・LeB) は名前の途中、4 文字以上 (PlanB・TypeA) は英単語 + 大文字 1 文字として略語に残す
+    private const int MinCamelAcronymLength = 4;
+
+    /// <summary>
+    /// 大文字で終わる略語 (OCR、AutoIME、PlanB) か。McA・LeB のように、短い頭 (Mc・Le) の後ろの大文字で終わるものは、
+    /// 略語ではなく名前 (McAfee・LeBron) の途中と見る (issue #266)。
+    /// </summary>
+    private static bool EndsWithAcronym(string head) =>
+        head.Length >= 2 && char.IsAsciiLetterUpper(head[^1]) && !(head.Length < MinCamelAcronymLength && char.IsAsciiLetterLower(head[^2]));
 
     /// <summary>
     /// 大文字 2 文字以上の後ろに小文字が続く (AIde・GPTni)。iOS・IDEs のような知っている書き方でなければ、
@@ -718,6 +725,56 @@ public sealed partial class CompositionDetector
             if (local < n && units[local].Raw == "@" && domainStarts) return local + 1;
         }
         return -1;
+    }
+
+    /// <summary>
+    /// 英語の語のすぐ後ろの . に続く、ドメイン・拡張子 (tetr.io、MeltypeTip.dll、abi.json、go.mod) の終わり。無ければ -1 (issue #260)。
+    /// ドメインは語全体が一致するときだけ (config の co、index の in を英字にして、残りをローマ字にしていた)。
+    /// 拡張子は、ローマ字として読めない (dll、aab)・数字や . / を含む (e57、go.mod)・よく使う拡張子 (ace、ini) なら英字のまま。
+    /// 最後までローマ字として読める語 (Meltype.desu) は、今までどおり判定する。後ろの助詞からは日本語 (MeltypeTip.dll|wokesu)。
+    /// </summary>
+    private int DotSuffixEnd(IReadOnlyList<CompositionUnit> units, int start, string pending, bool final)
+    {
+        static bool IsPart(CompositionUnit unit) => unit.Raw.Length > 0 && unit.Raw.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '+');
+        var n = units.Count;
+        var end = start;
+        while (end < n && IsPart(units[end])) end++;
+        // . / - で続く所まで 1 つの名前 (abi.json、go.work.sum、cargo/config.toml、db-journal)
+        while (end + 1 < n && units[end].Raw is "." or "/" or "-" && IsPart(units[end + 1]))
+        {
+            end++;
+            while (end < n && IsPart(units[end])) end++;
+        }
+        var name = Raw(units, start, end) + (end == n ? pending : "");
+        if (!name.Any(char.IsAsciiLetter)) return -1;
+        var lower = name.ToLowerInvariant();
+        var growing = end == n && !final;
+        static bool Known(string label) => DomainSuffixes.Contains(label) || FileExtensions.Contains(label);
+        var lastLabel = lower[(lower.LastIndexOfAny(['.', '/']) + 1)..];
+        if (Known(lower) || Known(lastLabel)) return end;
+        // ドメイン・拡張子の打ちかけ (tetr.i)
+        if (growing && DomainSuffixes.Concat(FileExtensions).Any(s => s.StartsWith(lastLabel, StringComparison.Ordinal))) return end;
+        if (lower.Any(c => char.IsAsciiDigit(c) || c is '.' or '/' or '_' or '+')) return end;
+        // 打っている途中も、最後の子音までかなになるときだけ読めるとみなす (Meltype.bas を ばs と表示すると、確定で打ち間違いとして ば に直される)
+        bool Readable(string text) => _romaji.Analyze(text) is { IsValid: true, Partial: "" or "n" };
+        var readable = Readable(lower);
+        // 短い語 (拡張子の長さ) の後ろが助詞で始まる日本語なら、そこまで。
+        //   ドメイン・拡張子の後ろ: 助詞の後ろが読める・英単語でも分ける (tetr.io|de、github.com|ni|push)。全体が読める語では、今までどおりドメインだけ
+        //   読めない語の後ろ: 助詞から最後まで読めるとき (dll|wokesu、json|nokakikata)。長い名前の途中 (gitig|nore)・助詞だけ (gc|no、t|ga) では分けない
+        for (var k = start + 1; k < end; k++)
+        {
+            var stem = Raw(units, start, k).ToLowerInvariant();
+            if (stem.Length > 4) break;
+            var rest = (Raw(units, k, end) + (end == n ? pending : "")).ToLowerInvariant();
+            if (TrailingParticles.FirstOrDefault(p => rest.StartsWith(p, StringComparison.Ordinal)) is not { } particle) continue;
+            var afterParticle = rest[particle.Length..];
+            // 英単語が続くのは 3 文字以上のときだけ (au|to|mount にしない)
+            if ((readable ? DomainSuffixes.Contains(stem) : Known(stem)) &&
+                (afterParticle.Length == 0 || Readable(afterParticle) || stem.Length >= 3 && IsKnownEnglishWord(afterParticle))) return k;
+            if (!readable && afterParticle.Length > 0 && Readable(rest) && !Readable(stem)) return k;
+        }
+        // 最後までローマ字として読める語 (Meltype.desu) は、ふつうに判定する
+        return readable ? -1 : end;
     }
 
     /// <summary>

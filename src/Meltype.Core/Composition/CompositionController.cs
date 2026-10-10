@@ -68,6 +68,13 @@ public interface ICompositionHost
     bool IsShiftDown() => false;
 
     /// <summary>
+    /// 入力欄の文字を、キーを処理しているその場で読めているか。読めている環境 (Mac) では、渡された
+    /// 「キャレットの前の文字」は今のキャレットの位置のものだと信じられる。読めていない環境 (Windows は別のスレッドで
+    /// 後から読む) では届く値が古いことがあるので、キャレットが動いたかの判断には使わない。
+    /// </summary>
+    bool SurroundingTextIsCurrent => false;
+
+    /// <summary>
     /// 入力欄のキャレットの前後の文字列 (確定済みの文字) を取りに行く。結果は後から UI スレッドで callback(前, 後ろ) に渡す。
     /// 取れなければ null を渡す。
     /// </summary>
@@ -248,6 +255,8 @@ public sealed class CompositionController
     private string? _lastCommitText;
     private string? _precedingText;
     private string? _followingText;
+    /// <summary>入力欄が教えてくれた、キャレットの直前の確定済みの文字 (読めなければ null)。確定し直してよいかの判断に使う。</summary>
+    private string? _caretBefore;
     private long _lastCommitTime = long.MinValue / 2;
     private int _compositionId;
     private ReconversionSelection? _reconversion;
@@ -429,6 +438,7 @@ public sealed class CompositionController
     {
         _lastCommitEnglish = null;
         _lastCommitText = null;
+        _caretBefore = null;
         _correctable.Clear();
     }
 
@@ -748,6 +758,7 @@ public sealed class CompositionController
         var recentOwnCommit = Environment.TickCount64 - _lastCommitTime < OwnCommitTrustMs;
         _precedingText = _lastCommitEnglish is null ? null : _lastCommitText;
         _followingText = null;
+        _caretBefore = null; // 読み直せなければ (返ってこなければ) キャレットの位置は確かめない = 今までどおり直す
         _text.PrecedingEnglish = _lastCommitEnglish;
         _text.PrecedingEnglishSentence = _lastCommitEnglish == true && IsEnglishSentence(_lastCommitText);
         _text.PrecedingEnglishName = _lastCommitEnglish == true && IsEnglishNameContext(_lastCommitText);
@@ -756,6 +767,8 @@ public sealed class CompositionController
         {
             // 返ってくるまでに別の入力になっていたら使わない。
             if (id != _compositionId) return;
+            // キャレットの前の文字は、確定し直してよいか (直前に確定した語が今のキャレットの位置にあるか) の判断にも使う。
+            _caretBefore = before;
             if (!recentOwnCommit && before is not null)
             {
                 _precedingText = before;
@@ -1789,6 +1802,15 @@ public sealed class CompositionController
         if (targets.Any(t => _options.Languages?.Get(t.Raw.ToLowerInvariant()) == t.English)) return null;
         var original = string.Concat(targets.Select(t => t.Text));
         if (replacement is null || replacement == original) return null;
+        // 直前に確定した語が、今のキャレットの位置に無い (別の場所をクリックした等) ときは書き換えない。
+        // 消すつもりの文字がそこに無いので、消すとキャレットの前の別の文字が消えてしまう。
+        // 入力欄の文字をその場で読めるホストだけ確かめる (Windows は別のスレッドで後から読むので、古い値で誤って止めない)。
+        if (_host.SurroundingTextIsCurrent && _caretBefore is { } caretBefore && !caretBefore.EndsWith(original, StringComparison.Ordinal))
+        {
+            Diagnostics.Log.Decision($"キャレットの位置が変わっているので確定し直しません: {Diagnostics.Log.Text(original)}");
+            _correctable.Clear();
+            return null;
+        }
 
         Diagnostics.Log.Decision($"前後の文脈に合わせて確定し直しました: {Diagnostics.Log.Text(original)}→{Diagnostics.Log.Text(replacement)}");
         _host.ReplaceBackward(original.Length, replacement);
