@@ -134,6 +134,9 @@ public sealed record CompositionOptions
     /// <summary>打ったキー (ローマ字) を変換ボックスに出すか (設定、issue #224)。</summary>
     public Func<bool> ShowTypedKeys { get; init; } = () => false;
 
+    /// <summary>変換前の Tab で変換を始めるか (設定、issue #219)。</summary>
+    public Func<bool> TabConversion { get; init; } = () => false;
+
     /// <summary>選んだ英訳の記録 (普通の変換の学習より弱く効かせる)。</summary>
     public TranslationHistory? TranslationHistory { get; init; }
 
@@ -422,6 +425,7 @@ public sealed class CompositionController
         _converting = false;
         _clauses = [];
         _spaceStartedConversion = false;
+        _tabStartedConversion = false;
     }
 
     /// <summary>フォーカスが変わったときなど。前の入力欄の文脈を持ち越さない。</summary>
@@ -601,12 +605,12 @@ public sealed class CompositionController
                 // 英語と判定した語で終わっているなら、変換ではなく確定して空白を入れる
                 // (日本語の部分は、ライブ変換が ON なら漢字にして、OFF なら見えているかなのまま確定)。
                 // 数字だけ (1、12) は、前が英文なら確定して空白 (I have 2 cats)。それ以外は変換して ① 一 Ⅰ などの候補を出す。
-                if (_text.IsAlphanumericAt(final: true) && !(_text.Mode == DisplayMode.Auto && _text.IsNumeric && _text.Raw.All(char.IsAsciiDigit) && _text.PrecedingEnglish != true))
+                if (SpaceCommitsAlphanumeric())
                 {
                     Commit(suffix: " ", fixEnglish: true);
                 }
                 else if (EndsWithEnglish(final: true)) CommitText(FixEnglishTypo(_text.RenderSegments(final: true, _options.LiveConversion() ? Convert : null)) + " ", english: true, _text.Raw);
-                else if (_text.Mode == DisplayMode.Auto && _detector.IsEnglishAtWordEnd(_text.Raw, _options.Level())) CommitText(FixEnglishTypo(_text.Raw) + " ", english: true, _text.Raw);
+                else if (SpaceCommitsAutoEnglish()) CommitText(FixEnglishTypo(_text.Raw) + " ", english: true, _text.Raw);
                 else
                 {
                     // Space で変換した = 語の後に空白を打とうとした、とも取れる (確定し直して英語にするときに空白を足す)。
@@ -636,6 +640,11 @@ public sealed class CompositionController
                 // 予測変換の候補を選ぶ (Tab で次、Shift+Tab で前。最後の次は選ばない状態に戻る)。
                 var step = _swallowedShift.Count > 0 ? -1 : 1;
                 _predictionIndex = (_predictionIndex + 1 + step + _predictions.Count + 1) % (_predictions.Count + 1) - 1;
+                return;
+            case VirtualKeys.Tab when !_converting && _swallowedShift.Count == 0 && !_host.IsShiftDown() && _options.TabConversion() && TabStartsConversion():
+                // Space なら変換を始める場面の Tab は、Space と同じく変換を始める (Microsoft IME と同じ。空白を打とうとした意味ではない: issue #219)。
+                StartConversion();
+                _tabStartedConversion = _converting;
                 return;
             case VirtualKeys.F6: SetMode(DisplayMode.Hiragana); return;
             case VirtualKeys.F7: SetMode(DisplayMode.Katakana); return;
@@ -935,6 +944,29 @@ public sealed class CompositionController
 
     // ---- 変換 (文節) ----
 
+    /// <summary>
+    /// Space を押したときに、変換ではなく確定して空白を入れる場面か (英語で終わる 3 条件)。
+    /// 例: hello (英語と判定) → true、kana → false。Tab で変換を始めるかの判定にも使う。
+    /// </summary>
+    private bool SpaceCommitsAsEnglish() => SpaceCommitsAlphanumeric() || EndsWithEnglish(final: true) || SpaceCommitsAutoEnglish();
+
+    private bool SpaceCommitsAlphanumeric() =>
+        _text.IsAlphanumericAt(final: true) && !(_text.Mode == DisplayMode.Auto && _text.IsNumeric && _text.Raw.All(char.IsAsciiDigit) && _text.PrecedingEnglish != true);
+
+    private bool SpaceCommitsAutoEnglish() => _text.Mode == DisplayMode.Auto && _detector.IsEnglishAtWordEnd(_text.Raw, _options.Level());
+
+    /// <summary>
+    /// Space の分岐で変換を始める (StartConversion に行く) 場面か。Tab で始めるときも同じ場面に限る (issue #219)。
+    /// Space と同じ順で判定するため、英語かを見る前に打ち間違いを直す (Enter で確定するときと同じ直し)。
+    /// </summary>
+    private bool TabStartsConversion()
+    {
+        if (IsProtectedInput) return false;
+        if (_text.PrecedingEnglish != true && PreviewCandidates() is not null) return false;
+        _text.FixTypos();
+        return !SpaceCommitsAsEnglish();
+    }
+
     /// <summary>変換中だけ意味を持つキー。処理したら true。</summary>
     private bool HandleConversionKey(int vk)
     {
@@ -974,10 +1006,15 @@ public sealed class CompositionController
                 FixMisspelling(typo);
                 StartConversion();
                 return true;
+            case VirtualKeys.Tab when _tabStartedConversion:
+                // Tab で始めた変換の中では、Tab が次の候補、Shift+Tab が前の候補 (issue #219)。
+                NextCandidate(shift || _host.IsShiftDown() ? -1 : +1);
+                return true;
             case VirtualKeys.Back:
             case VirtualKeys.Escape:
                 // 変換を取り消して、かなの入力に戻る。
                 _converting = false;
+                _tabStartedConversion = false;
                 return true;
             case >= 0x31 and <= 0x39 when !shift:
             case >= 0x61 and <= 0x69 when !shift:
@@ -1064,6 +1101,7 @@ public sealed class CompositionController
     /// </summary>
     private void StartConversion(bool preferJapanese = false)
     {
+        _tabStartedConversion = false;
         var clauses = new List<Clause>();
         var segments = _text.ConversionSegments();
         for (var s = 0; s < segments.Count; s++)
@@ -1751,6 +1789,9 @@ public sealed class CompositionController
     private const int MaxCorrectable = 4;
     private bool _spaceStartedConversion;
 
+    /// <summary>今の変換を Tab で始めたか (変換中の Tab で候補を送るため。issue #219)。</summary>
+    private bool _tabStartedConversion;
+
     /// <summary>キャレットが動いたかもしれないとき (Meltype を通らなかったキー・クリック)。直前の語は確定し直さない。</summary>
     public void ForgetLastCommit() => _correctable.Clear();
 
@@ -1864,6 +1905,7 @@ public sealed class CompositionController
         var formatEnglish = _options.AutomaticEnglishSpacing() && _text.Mode == DisplayMode.Auto;
         var spaceIntended = _spaceStartedConversion;
         _spaceStartedConversion = false;
+        _tabStartedConversion = false;
         // 誤変換の報告を調べられるように、打った英字・読み・文節の区切りもログに残す (ログはファイルに書く設定のときだけ保存される)。
         if (!_text.IsEmpty)
         {
@@ -1984,7 +2026,7 @@ public sealed class CompositionController
         }
         else
         {
-            var hint = _text.IsAlphanumeric ? "Enter 確定　Space 確定+空白　Shift+Space 日本語で変換　半角/全角 日本語に" : "Space 変換　←→ 文節　Enter 確定　F7 カタカナ　F10 英字";
+            var hint = _text.IsAlphanumeric ? "Enter 確定　Space 確定+空白　Shift+Space 日本語で変換　半角/全角 日本語に" : (_options.TabConversion() ? "Space/Tab 変換" : "Space 変換") + "　←→ 文節　Enter 確定　F7 カタカナ　F10 英字";
             if (_text.Suggestion() is { } suggestion) hint = $"Tab → {suggestion} (英字に)　" + hint;
             var preview = PreviewCandidates();
             var misspelling = MisspellingSuggestion();
