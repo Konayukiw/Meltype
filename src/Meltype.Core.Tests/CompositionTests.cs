@@ -209,7 +209,7 @@ internal static class CompositionTests
         public Keyboard(bool live = false, bool direct = false, ConversionHistory? history = null, IKanjiConverter? converter = null,
             Func<string, IReadOnlyList<string>>? moreCandidates = null, UserDictionary? userDictionary = null, LanguageMemory? languages = null,
             TranslationDictionary? translations = null, TranslationHistory? translationHistory = null, bool slashAsMiddleDot = false, Predictor? predictor = null,
-            Func<DateTime>? now = null, bool showTypedKeys = false)
+            Func<DateTime>? now = null, bool showTypedKeys = false, bool tabConversion = false)
         {
             Direct = direct;
             Controller = new CompositionController(Gate, Detector, converter ?? Converter, Host, new CompositionOptions
@@ -238,6 +238,7 @@ internal static class CompositionTests
                 SlashAsMiddleDot = () => slashAsMiddleDot,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
+                TabConversion = () => tabConversion,
             });
             Controller.Committed += Sigil.Append;
             Host.Replayed += e =>
@@ -2138,6 +2139,143 @@ internal static class CompositionTests
         k.Type("kana");
         k.Press(VirtualKeys.Tab);
         Assert.Equal("text:かな|down:09|passed-up:09", string.Join("|", k.Host.Events), "確定後の キーアップ は関所を通らず直接届く");
+    }
+
+    private static void ShiftTab(Keyboard k)
+    {
+        k.Host.PhysicalShift = true;
+        k.Key(VirtualKeys.LShift);
+        k.Press(VirtualKeys.Tab);
+        k.Key(VirtualKeys.LShift, up: true);
+        k.Host.PhysicalShift = false;
+    }
+
+    [Test]
+    public static void TabConversion_IsOnByDefault()
+    {
+        // #219: 設定「Tab で変換」は既定で ON
+        Assert.True(new Meltype.Config.Settings().TabConversion, "既定で ON");
+    }
+
+    [Test]
+    public static void TabConversion_StartsConversionLikeSpace()
+    {
+        // #219: 設定 ON なら変換前の Tab で、Space と同じ表示・候補の変換が始まり、Tab はアプリに渡らない
+        var space = new Keyboard();
+        space.Type("kana ");
+        var k = new Keyboard(tabConversion: true);
+        k.Type("kana");
+        k.Press(VirtualKeys.Tab);
+        Assert.True(k.Host.View?.Converting == true, "変換が始まる");
+        Assert.Equal(space.Showing, k.Showing);
+        Assert.Equal(string.Join(",", space.Host.View!.Candidates), string.Join(",", k.Host.View!.Candidates));
+        Assert.True(!k.Host.Events.Any(e => e == "down:09"), "Tab は渡さない: " + string.Join("|", k.Host.Events));
+    }
+
+    [Test]
+    public static void TabConversion_TabMovesToNextAndShiftTabToPreviousCandidate()
+    {
+        // #219: Tab で始めた変換の中では Tab が次の候補 (Space と同じ)、Shift+Tab が前の候補
+        var space = new Keyboard();
+        space.Type("kana  ");
+        var k = new Keyboard(tabConversion: true);
+        k.Type("kana");
+        k.Press(VirtualKeys.Tab);
+        var first = k.Showing;
+        k.Press(VirtualKeys.Tab);
+        Assert.Equal(space.Showing, k.Showing);
+        Assert.True(k.Showing != first, "候補が変わる");
+        ShiftTab(k);
+        Assert.Equal(first, k.Showing, "前の候補に戻る");
+    }
+
+    [Test]
+    public static void TabConversion_EnterCommitsFirstCandidateWithoutPassingTab()
+    {
+        // #219: Tab で始めた変換は Enter で 1 番目の候補を確定し、Tab はアプリに渡らない
+        var space = new Keyboard();
+        space.Type("kana ");
+        space.Press(VirtualKeys.Return);
+        var k = new Keyboard(tabConversion: true);
+        k.Type("kana");
+        k.Press(VirtualKeys.Tab);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(space.Host.Document, k.Host.Document);
+        Assert.True(!k.Host.Events.Any(e => e == "down:09"), string.Join("|", k.Host.Events));
+    }
+
+    [Test]
+    public static void TabConversion_TabInsideSpaceConversion_CommitsAndPassesTab()
+    {
+        // #219: Space で始めた変換の中の Tab は、今までどおり確定して Tab を渡す
+        var off = new Keyboard();
+        off.Type("kana ");
+        off.Press(VirtualKeys.Tab);
+        var k = new Keyboard(tabConversion: true);
+        k.Type("kana ");
+        k.Press(VirtualKeys.Tab);
+        Assert.Equal(string.Join("|", off.Host.Events), string.Join("|", k.Host.Events));
+        Assert.True(k.Host.Events.Contains("down:09"), string.Join("|", k.Host.Events));
+    }
+
+    [Test]
+    public static void TabConversion_EndingInEnglish_CommitsAndPassesTabWithoutSpace()
+    {
+        // #219: 英語で終わっているときは変換せず、確定して Tab を渡す (空白は入れない)
+        var k = new Keyboard(tabConversion: true);
+        k.Type("hello");
+        k.Press(VirtualKeys.Tab);
+        Assert.Equal("text:hello|down:09|passed-up:09", string.Join("|", k.Host.Events));
+    }
+
+    [Test]
+    public static void TabConversion_PredictionTakesTabFirst()
+    {
+        // #219: 予測変換の候補が出ているときの Tab は、今までどおり予測を選ぶ
+        var k = new Keyboard(predictor: new Predictor(new PhraseHistory(null), null, null), tabConversion: true);
+        k.Type("kyou ");
+        k.Press(VirtualKeys.Return);
+        k.Type("kyo");
+        k.Press(VirtualKeys.Tab);
+        Assert.True(k.Host.View?.Converting != true, "変換にはならない");
+        Assert.Equal("今日", k.Showing);
+        Assert.Equal(0, k.Host.View!.SelectedPrediction);
+    }
+
+    [Test]
+    public static void TabConversion_MisspellingTakesTabFirst()
+    {
+        // #219: もしかしての提案が出ているときの Tab は、今までどおり書き間違いを直す
+        var k = new Keyboard(tabConversion: true);
+        k.Type("buresureddo");
+        k.Press(VirtualKeys.Tab);
+        Assert.Equal("ぶれすれっと", k.Showing);
+        Assert.True(k.Host.View?.Converting != true, "変換にはならない");
+    }
+
+    [Test]
+    public static void TabConversion_EscThenTab_StartsConversionAgain()
+    {
+        // #219: Esc で変換を取り消してかなに戻ったあとの Tab は、また変換を始める
+        var k = new Keyboard(tabConversion: true);
+        k.Type("kana");
+        k.Press(VirtualKeys.Tab);
+        k.Press(VirtualKeys.Escape);
+        Assert.True(k.Host.View?.Converting != true, "かなに戻る");
+        k.Press(VirtualKeys.Tab);
+        Assert.True(k.Host.View?.Converting == true, "再び変換が始まる");
+        Assert.True(!k.Host.Events.Any(e => e == "down:09"), string.Join("|", k.Host.Events));
+    }
+
+    [Test]
+    public static void TabConversion_ShiftTabWithoutPrediction_CommitsAndPassesTab()
+    {
+        // #219: Shift+Tab は変換を始めず、今までどおり確定して通す
+        var k = new Keyboard(tabConversion: true);
+        k.Type("kana");
+        ShiftTab(k);
+        Assert.True(k.Host.View?.Converting != true, "変換にはならない");
+        Assert.True(k.Host.Events.Contains("down:09"), string.Join("|", k.Host.Events));
     }
 
     [Test]

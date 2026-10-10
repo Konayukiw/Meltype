@@ -58,6 +58,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             TranslationCandidates = () => _engine.Settings.TranslationCandidates,
             CandidateMeanings = () => _engine.Settings.ShowCandidateMeanings,
             ShowTypedKeys = () => _engine.Settings.ShowTypedKeys,
+            TabConversion = () => _engine.Settings.TabConversion,
             CorrectTypos = () => _engine.Settings.CorrectTypos,
             SlashAsMiddleDot = () => _engine.Settings.SlashAsMiddleDot,
             SpaceAroundEnglish = () => _engine.Settings.SpaceAroundEnglish,
