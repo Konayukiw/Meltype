@@ -273,6 +273,7 @@ General Public License for more details.
   <a href="https://github.com/daddydaddy"><img src="https://github.com/daddydaddy.png?size=120" width="60" alt="@daddydaddy" title="@daddydaddy"></a>
   <a href="https://github.com/Kuraido1018"><img src="https://github.com/Kuraido1018.png?size=120" width="60" alt="@Kuraido1018" title="@Kuraido1018"></a>
   <a href="https://github.com/overdozer1124"><img src="https://github.com/overdozer1124.png?size=120" width="60" alt="@overdozer1124" title="@overdozer1124"></a>
+  <a href="https://github.com/01mercurylampe"><img src="https://github.com/01mercurylampe.png?size=120" width="60" alt="@01mercurylampe" title="@01mercurylampe"></a>
 </p>
 <!-- sponsors:end -->
 <sub>名前を公開にして応援してくださった方を、毎日自動で載せています (.github/workflows/sponsors.yml)。</sub>
